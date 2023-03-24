@@ -12,7 +12,9 @@ struct html_writer {
 
     explicit html_writer(output_type _out, document::write_opts _opts)
         : out(_out)
-        , opts(_opts) {}
+        , opts(_opts) {
+            if (opts.text_columns == 0) opts.text_columns = 1000000000;
+        }
 
     /// Write a formatted string to a file or string.
     template <typename... arguments>
