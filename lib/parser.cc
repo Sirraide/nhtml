@@ -1,21 +1,12 @@
 #include <deque>
-#include <fcntl.h>
 #include <fmt/color.h>
 #include <nhtml/parser.hh>
-#include <sys/mman.h>
-#include <sys/stat.h>
 
 namespace nhtml::detail {
 namespace {
 struct parser;
 using el = element::ptr;
 using err = std::unexpected<std::string>;
-
-/// Helper to make an error.
-template <typename... arguments>
-auto mkerr(fmt::format_string<arguments...> fmt, arguments&&... args) -> std::unexpected<std::string> {
-    return std::unexpected{fmt::format(fmt, std::forward<arguments>(args)...)};
-}
 
 #define check NHTML_CHECK
 
@@ -96,67 +87,6 @@ static constexpr std::string_view diag_name(diag_kind kind) {
         default: return "Diagnostic";
     }
 }
-
-/// A source file.
-struct file {
-    string_ref contents;
-    fs::path name;
-    fs::path parent_directory;
-
-    static auto map(fs::path filename) -> std::expected<file, std::string> {
-        file f;
-
-        /// Open.
-        int fd = ::open(filename.c_str(), O_RDONLY);
-        if (fd < 0) [[unlikely]]
-            return mkerr("Could not open file: {}: {}", filename.native(), std::strerror(errno));
-
-        /// Get size.
-        struct stat s {};
-        if (::fstat(fd, &s)) [[unlikely]]
-            return mkerr("Could not stat file: {}: {}", filename.native(), std::strerror(errno));
-        auto sz = size_t(s.st_size);
-
-        /// If the size is not zero, map the file. Otherwise, set the contents to the empty string.
-        if (sz != 0) [[likely]] {
-            /// Map.
-            auto* mem = (char*) ::mmap(nullptr, sz, PROT_READ | PROT_WRITE, MAP_PRIVATE, fd, 0);
-            if (mem == MAP_FAILED) [[unlikely]]
-                return mkerr("Could not mmap file: {}: {}", filename.native(), std::strerror(errno));
-            ::close(fd);
-
-            /// Copy to string.
-            f.contents = std::string{mem, sz};
-
-            /// Unmap.
-            if (::munmap(mem, sz)) [[unlikely]]
-                return mkerr("Could not munmap file: {}: {}", filename.native(), std::strerror(errno));
-        } else [[unlikely]] {
-            f.contents = "";
-        }
-
-        /// Set the parent path name.
-        f.parent_directory = get_parent_directory(filename);
-        f.name = std::move(filename);
-        return f;
-    }
-
-    static auto get_parent_directory(const fs::path& filename) -> fs::path {
-        /// Determine the parent directory of the file.
-        /// If the path has a parent, use that.
-        std::error_code ec;
-        if (not filename.has_parent_path()) {
-            auto par = filename.parent_path();
-            auto par_canon = fs::canonical(par, ec);
-            if (not ec and fs::exists(par_canon, ec) and fs::is_directory(par_canon, ec) and not ec) return par_canon;
-        }
-
-        /// Otherwise, use the current working directory.
-        auto path = fs::current_path(ec);
-        if (ec) return "";
-        return path;
-    }
-};
 
 /// A lexer that reads a source file and provides tokens from it.
 struct lexer {
@@ -255,13 +185,6 @@ struct parser {
     auto lex() -> lexer& { return *lexer_stack.back(); }
     auto curr() -> token& { return lex().tok; }
     bool at(tk t) { return curr().type == t; }
-    auto consume(tk t) -> res<bool> {
-        if (at(t)) {
-            advance();
-            return true;
-        }
-        return false;
-    }
 
     /// Issue a diagnostic.
     template <typename... arguments>
@@ -345,12 +268,11 @@ struct parser {
 
         /// Create a lexer for the first file.
         lexers.emplace_back(*this, 0);
-        auto& l = lexers.back();
-        lexer_stack.push_back(&l);
-        check(l.init());
+        lexer_stack.push_back(&lexers.back());
+        check(lexers.back().init());
 
         /// Parse the document.
-        while (l.tok.type != tk::eof) {
+        while (lexers.back().tok.type != tk::eof) {
             /// Parse an element.
             auto e = parse_element();
             if (not e) return err{e.error()};
@@ -383,7 +305,9 @@ struct parser {
         if (name == "text") return parse_text_elem();
 
         /// Element contains other elements.
-        if (consume(tk::lbrace)) {
+        if (at(tk::lbrace)) {
+            advance();
+
             /// Parse the elements.
             std::vector<el> elements;
             while (not at(tk::rbrace)) {
@@ -393,14 +317,15 @@ struct parser {
             }
 
             /// Yeet "}".
-            if (not consume(tk::rbrace)) return diag(diag_kind::error, curr().location, "Expected '}}', got {}", tk_to_str(curr().type));
+            if (not at(tk::rbrace)) return diag(diag_kind::error, curr().location, "Expected '}}', got {}", tk_to_str(curr().type));
+            advance();
 
             /// Return the element.
             return element::make(std::move(name), std::move(elements));
         }
 
         /// Element contains only text.
-        if (consume(tk::lparen)) {
+        if (at(tk::lparen)) {
             /// Parse the text.
             auto text = parse_text_elem();
             if (not text) return err{text.error()};
@@ -421,7 +346,8 @@ struct parser {
         auto text = lex().read_until_char(')');
 
         /// Must be at ')'.
-        if (not consume(tk::rparen)) return diag(diag_kind::error, curr().location, "Expected ')', got {}", tk_to_str(curr().type));
+        if (not at(tk::rparen)) return diag(diag_kind::error, curr().location, "Expected ')', got {}", tk_to_str(curr().type));
+        advance();
 
         /// Create the text element.
         auto e = element::make();

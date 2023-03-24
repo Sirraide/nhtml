@@ -156,7 +156,6 @@ endif()
 ## ============================================================================
 ## Everything in ‘src’ is part of the project.
 file(GLOB_RECURSE library_sources lib/*.cc include/*.hh)
-file(GLOB_RECURSE sources src/*.cc include/*.hh)
 
 ## As well as everything in ‘include’, if it exists.
 if (EXISTS ${PROJECT_SOURCE_DIR}/include)
@@ -166,9 +165,16 @@ endif()
 
 ## Add the library and the executable.
 add_library(nhtml STATIC ${library_sources})
-add_executable(nhtmlc ${sources})
+add_executable(nhtmlc src/nhtmlc.cc)
+if (UNIX)
+    add_executable(run-tests src/test_runner.cc)
+endif()
 
 ## Apply our options.
 target_include_directories(nhtml PUBLIC "${PROJECT_SOURCE_DIR}/include")
 target_link_libraries(nhtml PRIVATE options)
 target_link_libraries(nhtmlc PRIVATE options nhtml)
+if (UNIX)
+    target_compile_definitions(run-tests PRIVATE "__NHTML_DIR__=${PROJECT_SOURCE_DIR}")
+    target_link_libraries(run-tests PRIVATE options nhtml)
+endif()

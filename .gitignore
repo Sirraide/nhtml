@@ -7,6 +7,7 @@
 out/
 nhtml
 nhtml.exe
+run-tests
 
 ## Valgrind.
 callgrind.out.*
