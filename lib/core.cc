@@ -154,7 +154,20 @@ struct html_writer {
 
         /// TODO: Special handling for <p>, <pre>, <code>, <script>, <style>.
         indent(i);
-        write("<{}>", el.tag_name); // clang-format off
+        write("<{}", el.tag_name);
+
+        /// Write attributes.
+        if (not el.class_list.empty()) {
+            write(" class=\"");
+            for (usz j = 0; j < el.class_list.size(); ++j) {
+                if (j) write(" ");
+                write("{}", el.class_list[j]);
+            }
+            write("\"");
+        }
+        write(">"); // clang-format off
+
+        /// Write content.
         std::visit(overloaded {
             [&](const std::string& str) {
                 if (write_text(str, i, el.tag_name.size() + 2))

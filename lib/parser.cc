@@ -19,6 +19,7 @@ enum struct tk {
     name,
     number,
     string,
+    class_name, /// Oh the irony...
 
     lbrace,
     rbrace,
@@ -47,6 +48,7 @@ auto tk_to_str(tk t) -> std::string_view {
         case tk::invalid: return "invalid token";
         case tk::eof: return "eof";
         case tk::name: return "name";
+        case tk::class_name: return "class";
         case tk::number: return "number";
         case tk::string: return "string";
         case tk::lbrace: return "lbrace";
@@ -293,7 +295,7 @@ struct parser {
     }
 
     /// Parse a named element.
-    /// <element-named> ::= NAME [ <content> ]
+    /// <element-named> ::= NAME { CLASS } [ <content> ]
     /// <element-text>  ::= [ TEXT ] <text-body>
     /// <content>  ::= "{" { <element> } "}" | <text-body>
     auto parse_named_element() -> res<el> {
@@ -303,6 +305,20 @@ struct parser {
 
         /// Text element.
         if (name == "text") return parse_text_elem();
+
+        /// Parse the classes.
+        std::vector<std::string> classes;
+        while (at(tk::class_name)) {
+            classes.push_back(tolower(curr().text));
+            advance();
+        }
+
+        /// Create an element, attach classes, etc.
+        auto make = [&](auto&&... args) -> el {
+            auto e = element::make(NHTML_FWD(args)...);
+            e->class_list = std::move(classes);
+            return e;
+        };
 
         /// Element contains other elements.
         if (at(tk::lbrace)) {
@@ -321,7 +337,7 @@ struct parser {
             advance();
 
             /// Return the element.
-            return element::make(std::move(name), std::move(elements));
+            return make(std::move(name), std::move(elements));
         }
 
         /// Element contains only text.
@@ -329,11 +345,11 @@ struct parser {
             /// Parse the text.
             auto text = parse_text_elem();
             if (not text) return err{text.error()};
-            return element::make(std::move(name), std::move(*text));
+            return make(std::move(name), std::move(*text));
         }
 
         /// Element is empty.
-        return element::make(std::move(name));
+        return make(std::move(name));
     }
 
     /// Parse element text body.
@@ -476,6 +492,19 @@ auto lexer::next() -> res<void> {
     tok.type = tk::invalid;
     tok.location.pos = static_cast<u32>(curr - p.files[file_index].contents.data() - 1);
 
+    /// Reads a name.
+    auto read_name = [this] {
+        /// Characters that delimit a name.
+        static constexpr auto name_delims = "(){}. \t\r\n\f\v"sv;
+
+        tok.type = tk::name;
+        tok.text.clear();
+        while (not name_delims.contains(lastc)) {
+            tok.text += lastc;
+            next_char();
+        }
+    };
+
     /// Lex the token.
     switch (lastc) {
         case '(':
@@ -507,18 +536,18 @@ auto lexer::next() -> res<void> {
             }
 
             /// Not a comment. Handle in default case.
-            [[fallthrough]];
+            goto default_case;
+
+        /// Class.
+        case '.':
+            next_char();
+            read_name();
+            tok.type = tk::class_name;
+            break;
 
         default:
-            /// Characters that delimit a name.
-            static constexpr auto name_delims = "(){} \t\r\n\f\v"sv;
-
-            tok.type = tk::name;
-            tok.text.clear();
-            while (not name_delims.contains(lastc)) {
-                tok.text += lastc;
-                next_char();
-            }
+        default_case:
+            read_name();
             break;
     }
 
