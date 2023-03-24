@@ -49,6 +49,26 @@ public:
 
 /// An NHTML document.
 struct document {
+    /// Stringification options.
+    struct write_opts {
+        static constexpr u64 default_indent_width = 4;
+        static constexpr u64 default_text_columns = 140;
+        static constexpr bool default_no_indent = false;
+        static constexpr bool default_use_tabs = false;
+
+        /// Number of spaces per indentation level. Ignored for tabs.
+        u64 indent_width = default_indent_width;
+
+        /// Maximum column number.
+        u64 text_columns = default_text_columns;
+
+        /// Whether to disable indenting.
+        bool no_indent = default_no_indent;
+
+        /// Whether to use tabs instead of spaces.
+        bool use_tabs = default_use_tabs;
+    };
+
     /// The document’s child elements.
     std::vector<element::ptr> elements;
 
@@ -56,10 +76,16 @@ struct document {
     explicit document() = default;
 
     /// Write the document to a file.
-    void write(FILE* output_file) const;
+    ///
+    /// \param output_file The file to write to.
+    /// \param opts Stringification options. Pass `{}` for defaults.
+    void write(FILE* output_file, write_opts opts) const;
 
     /// Write the document to a string.
-    auto string() const -> std::string;
+    ///
+    /// \param opts Stringification options. Pass `{}` for defaults.
+    /// \return The stringified document.
+    [[nodiscard]] auto string(write_opts opts) const -> std::string;
 };
 } // namespace nhtml
 

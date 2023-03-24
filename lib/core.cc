@@ -8,9 +8,11 @@ struct html_writer {
     using output_type = std::conditional_t<std::is_pointer_v<output_type_t>, output_type_t, output_type_t&>;
     const output_type out;
     usz lines = 0;
+    document::write_opts opts;
 
-    explicit html_writer(output_type _out)
-        : out(_out) {}
+    explicit html_writer(output_type _out, document::write_opts _opts)
+        : out(_out)
+        , opts(_opts) {}
 
     /// Write a formatted string to a file or string.
     template <typename... arguments>
@@ -21,7 +23,10 @@ struct html_writer {
 
     /// Write indentation.
     void indent(usz indent_level) {
-        write("{:>{}}", "", indent_level * 4);
+        if (not opts.no_indent) {
+            if (opts.use_tabs) write("\t");
+            else write("{:>{}}", "", indent_level * opts.indent_width);
+        }
     }
 
     /// Write a line break.
@@ -44,7 +49,7 @@ struct html_writer {
     /// \return Whether we’ve emitted a newline.
     void write_text(std::string_view text, usz indent_level, usz line_length) {
         /// For line wrapping.
-        const usz max_line_length = std::max<usz>(140 - indent_level * 4, 40);
+        const usz max_line_length = std::max<usz>(opts.text_columns - indent_level * 4, 40);
         bool have_line_break = false;
         bool need_indent = line_length == 0;
 
@@ -221,21 +226,21 @@ struct html_writer {
 };
 
 template <typename t>
-html_writer(t) -> html_writer<t>;
+html_writer(t, document::write_opts) -> html_writer<t>;
 
 } // namespace nhtml::detail
 
 /// ===========================================================================
 ///  Document
 /// ===========================================================================
-void nhtml::document::write(FILE* output_file) const {
-    detail::html_writer writer{output_file};
+void nhtml::document::write(FILE* output_file, write_opts opts) const {
+    detail::html_writer writer{output_file, opts};
     writer.write(*this);
 }
 
-auto nhtml::document::string() const -> std::string {
+auto nhtml::document::string(write_opts opts) const -> std::string {
     std::string out;
-    detail::html_writer writer{out};
+    detail::html_writer writer{out, opts};
     writer.write(*this);
     return out;
 }

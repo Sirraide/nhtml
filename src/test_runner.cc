@@ -340,7 +340,7 @@ void run_test(const fs::path& path, size_t id) {
         if (not doc) throw errored(doc.error());
 
         /// Stringify the document.
-        auto actual = nhtml::detail::trim(doc->string());
+        auto actual = nhtml::detail::trim(doc->string({}));
         auto expected_text = nhtml::detail::trim(std::move(expected->contents).string());
         if ((actual == expected_text) == should_error) throw failed(
             "\033[33mExpected:\n\033[32m{}\033[33m\nActual:\n\033[31m{}\033[33m",
