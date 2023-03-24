@@ -7,6 +7,7 @@ template <typename output_type_t>
 struct html_writer {
     using output_type = std::conditional_t<std::is_pointer_v<output_type_t>, output_type_t, output_type_t&>;
     const output_type out;
+    usz lines = 0;
 
     explicit html_writer(output_type _out)
         : out(_out) {}
@@ -23,6 +24,12 @@ struct html_writer {
         write("{:>{}}", "", indent_level * 4);
     }
 
+    /// Write a line break.
+    void nl() {
+        write("\n");
+        lines++;
+    }
+
     /// Write text to a file or string.
     ///
     /// This does several things:
@@ -35,7 +42,7 @@ struct html_writer {
     /// \param indent_level The indentation level.
     /// \param line_length The current line length.
     /// \return Whether we’ve emitted a newline.
-    bool write_text(std::string_view text, usz indent_level, usz line_length) {
+    void write_text(std::string_view text, usz indent_level, usz line_length) {
         /// For line wrapping.
         const usz max_line_length = std::max<usz>(140 - indent_level * 4, 40);
         bool have_line_break = false;
@@ -64,10 +71,10 @@ struct html_writer {
             /// enough to fit. First, if we haven’t emitted a newline after
             /// the opening tag yet, write one.
             if (line_length + line.size() > max_line_length and not have_line_break) {
-                write("\n");
+                nl();
                 have_line_break = true;
                 line_length = 0;
-                indent(indent_level);
+                need_indent = true;
             }
 
             /// Then, break the line as often as necessary.
@@ -81,10 +88,10 @@ struct html_writer {
                 if (line_length + space <= max_line_length) {
                     /// Write the segment.
                     eject_text(line.substr(0, space));
-                    write("\n");
+                    nl();
                     line_length = 0;
+                    need_indent = true;
                     segment_to_write = line = line.substr(space + 1);
-                    if (not line.empty()) indent(indent_level);
                     continue;
                 }
 
@@ -97,9 +104,14 @@ struct html_writer {
             text.remove_prefix(chars);
         };
 
-        /// Number of whitespace characters in the current segment. Set to 1
-        /// initially so we skip leading whitespace.
-        usz ws_count = 1;
+        /// Skip leading whitespace.
+        while (it != text.end() and std::isspace(*it)) {
+            ++it;
+            text.remove_prefix(1);
+        }
+
+        /// Number of whitespace characters in the current segment.
+        usz ws_count = 0;
         for (; it != text.end(); ++it) {
             switch (*it) {
                 /// Whitespace.
@@ -141,7 +153,9 @@ struct html_writer {
         /// Write the last segment.
         while (ws_count--) text.remove_suffix(1);
         eject();
-        return have_line_break;
+
+        /// Last line break.
+        if (have_line_break) nl();
     }
 
     /// Write an element to a file or string.
@@ -169,13 +183,15 @@ struct html_writer {
         /// Write ID.
         if (not el.id.empty()) write(" id=\"{}\"", el.id);
 
-        write(">"); // clang-format off
+        /// Close opening tag. Note the line in case we need to insert a line break later.
+        write(">");
+        auto line = lines;
 
         /// Write content.
+        // clang-format off
         std::visit(overloaded {
             [&](const std::string& str) {
-                if (write_text(str, i, el.tag_name.size() + 2))
-                    write("\n");
+                write_text(str, i + 1, el.tag_name.size() + 2);
             },
             [&](const element::vector& els) {
                 /// No elements to write.
@@ -183,17 +199,19 @@ struct html_writer {
 
                 /// If the only element is text, write as text instead.
                 if (els.size() == 1 and els[0]->tag_name == "text") {
-                    write_text(std::get<std::string>(els[0]->content), i, el.tag_name.size() + 2);
+                    write_text(std::get<std::string>(els[0]->content), i + 1, el.tag_name.size() + 2);
                     return;
                 }
 
                 /// Otherwise, write the elements.
-                write("\n");
+                nl();
                 for (const auto& e : els) write(*e, i + 1);
-                indent(i);
             },
         }, el.content); // clang-format on
-        write("</{}>\n", el.tag_name);
+
+        if (line != lines) indent(i);
+        write("</{}>", el.tag_name);
+        nl();
     }
 
     /// Write a document to a file or string.
