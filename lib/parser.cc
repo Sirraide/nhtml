@@ -286,28 +286,38 @@ struct parser {
     }
 
     /// Parse an element.
-    /// <element>  ::= <element-named> | <element-text>
+    /// <element>  ::= <element-named> | <element-text> | <element-implicit-div>
     auto parse_element() -> res<el> {
         switch (curr().type) {
-            case tk::name: return parse_named_element();
+            /// Named element.
+            case tk::name: {
+                auto name = tolower(curr().text);
+                advance();
+                return parse_named_element(std::move(name));
+            }
+
+            /// Implicit div.
+            case tk::class_name: {
+                auto cl = curr().text;
+                advance();
+                return parse_named_element("div"s, {std::move(cl)});
+            }
+
             default: return diag(diag_kind::error, curr().location, "Expected element, got {}", tk_to_str(curr().type));
         }
     }
 
     /// Parse a named element.
-    /// <element-named> ::= NAME { CLASS } [ <content> ]
+    /// <element-named> ::= NAME <element-named-rest>
+    /// <element-implicit-div> ::= CLASS <element-named-rest>
+    /// <element-named-rest> ::= { CLASS } [ <content> ]
     /// <element-text>  ::= [ TEXT ] <text-body>
     /// <content>  ::= "{" { <element> } "}" | <text-body>
-    auto parse_named_element() -> res<el> {
-        /// Parse the name.
-        auto name = tolower(curr().text);
-        advance();
-
+    auto parse_named_element(std::string name, std::vector<std::string> classes = {}) -> res<el> {
         /// Text element.
         if (name == "text") return parse_text_elem();
 
         /// Parse the classes.
-        std::vector<std::string> classes;
         while (at(tk::class_name)) {
             classes.push_back(tolower(curr().text));
             advance();

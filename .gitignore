@@ -5,8 +5,8 @@
 
 ## Build files.
 out/
-nhtml
-nhtml.exe
+nhtmlc
+nhtmlc.exe
 run-tests
 
 ## Valgrind.
