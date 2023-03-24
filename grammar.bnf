@@ -1,8 +1,8 @@
 <document> ::= { <element> }
 <element>  ::= <element-named> | <element-text> | <element-implicit-div>
 <element-named> ::= NAME <element-named-rest>
-<element-implicit-div> ::= CLASS <element-named-rest>
-<element-named-rest> ::= { CLASS } [ <content> ]
+<element-implicit-div> ::= ( CLASS | ID) <element-named-rest>
+<element-named-rest> ::= { CLASS | ID } [ <content> ]
 <element-text>  ::= [ TEXT ] <text-body>
 <text-body> ::= "(" TOKENS ")"
 <content>  ::= "{" { <element> } "}" | <text-body>

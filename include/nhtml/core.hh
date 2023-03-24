@@ -3,6 +3,8 @@
 
 #include <nhtml/utils.hh>
 #include <optional>
+#include <set>
+#include <unordered_set>
 #include <vector>
 
 namespace nhtml {
@@ -35,11 +37,11 @@ public:
     /// The element’s name.
     std::string tag_name;
 
-    /// The element’s classes.
-    std::vector<std::string> class_list;
+    /// The element’s classes. Ordered for deterministic output.
+    std::set<std::string> class_list;
 
     /// The element’s ID, if any.
-    std::optional<std::string> id;
+    std::string id;
 
     /// The element’s content.
     std::variant<vector, std::string> content;

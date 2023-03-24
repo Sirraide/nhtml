@@ -1,6 +1,7 @@
 #include <deque>
 #include <fmt/color.h>
 #include <nhtml/parser.hh>
+#include <unordered_set>
 
 namespace nhtml::detail {
 namespace {
@@ -20,6 +21,7 @@ enum struct tk {
     number,
     string,
     class_name, /// Oh the irony...
+    id,
 
     lbrace,
     rbrace,
@@ -49,6 +51,7 @@ auto tk_to_str(tk t) -> std::string_view {
         case tk::eof: return "eof";
         case tk::name: return "name";
         case tk::class_name: return "class";
+        case tk::id: return "id";
         case tk::number: return "number";
         case tk::string: return "string";
         case tk::lbrace: return "lbrace";
@@ -303,23 +306,35 @@ struct parser {
                 return parse_named_element("div"s, {std::move(cl)});
             }
 
+            /// Implicit div.
+            case tk::id: {
+                auto id = curr().text;
+                advance();
+                return parse_named_element("div"s, {}, std::move(id));
+            }
+
             default: return diag(diag_kind::error, curr().location, "Expected element, got {}", tk_to_str(curr().type));
         }
     }
 
     /// Parse a named element.
     /// <element-named> ::= NAME <element-named-rest>
-    /// <element-implicit-div> ::= CLASS <element-named-rest>
-    /// <element-named-rest> ::= { CLASS } [ <content> ]
+    /// <element-implicit-div> ::= ( CLASS | ID) <element-named-rest>
+    /// <element-named-rest> ::= { CLASS | ID } [ <content> ]
     /// <element-text>  ::= [ TEXT ] <text-body>
     /// <content>  ::= "{" { <element> } "}" | <text-body>
-    auto parse_named_element(std::string name, std::vector<std::string> classes = {}) -> res<el> {
+    auto parse_named_element(std::string name, std::set<std::string> classes = {}, std::string id = "") -> res<el> {
         /// Text element.
         if (name == "text") return parse_text_elem();
 
         /// Parse the classes.
-        while (at(tk::class_name)) {
-            classes.push_back(tolower(curr().text));
+        while (at(tk::class_name) or at(tk::id)) {
+            if (at(tk::id)) {
+                if (not id.empty()) return diag(diag_kind::error, curr().location, "Element already has an ID");
+                id = trim(curr().text);
+            } else {
+                classes.insert(trim(tolower(curr().text)));
+            }
             advance();
         }
 
@@ -327,6 +342,7 @@ struct parser {
         auto make = [&](auto&&... args) -> el {
             auto e = element::make(NHTML_FWD(args)...);
             e->class_list = std::move(classes);
+            e->id = std::move(id);
             return e;
         };
 
@@ -505,7 +521,7 @@ auto lexer::next() -> res<void> {
     /// Reads a name.
     auto read_name = [this] {
         /// Characters that delimit a name.
-        static constexpr auto name_delims = "(){}. \t\r\n\f\v"sv;
+        static constexpr auto name_delims = "(){}.# \t\r\n\f\v"sv;
 
         tok.type = tk::name;
         tok.text.clear();
@@ -553,6 +569,13 @@ auto lexer::next() -> res<void> {
             next_char();
             read_name();
             tok.type = tk::class_name;
+            break;
+
+        /// ID.
+        case '#':
+            next_char();
+            read_name();
+            tok.type = tk::id;
             break;
 
         default:

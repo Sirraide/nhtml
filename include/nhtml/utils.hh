@@ -174,7 +174,6 @@ struct [[nodiscard]] res<bool> : std::expected<bool, std::string> {
     [[nodiscard]] bool is_error() const { return not base::operator bool(); }
 };
 
-
 /// Replace all occurrences of `from` with `to` in `str`.
 [[gnu::always_inline]] constexpr void replace_all(
     std::string& str,
@@ -195,7 +194,7 @@ constexpr usz number_width(usz number, usz base = 10) {
 std::string escape(std::string str);
 
 /// Trim a string.
-auto trim(std::same_as<std::string> auto&& s) -> decltype(s) {
+auto trim(is<std::string> auto&& s) -> decltype(s) {
     s.erase(s.begin(), std::find_if(s.begin(), s.end(), [](int ch) { return !std::isspace(ch); }));
     s.erase(std::find_if(s.rbegin(), s.rend(), [](int ch) { return !std::isspace(ch); }).base(), s.end());
     return std::forward<decltype(s)>(s);

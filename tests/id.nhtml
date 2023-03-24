@@ -1,0 +1,5 @@
+div#foo {
+    #bar (asfasdfadfadsf)
+    #baz.foo (asfasdfadfadsf)
+    .foo#qux (asfasdfadfadsf)
+}

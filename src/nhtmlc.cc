@@ -17,7 +17,7 @@ int main(int argc, char** argv) {
         auto fname = options::get<"path">();
         auto doc = nhtml::parse_file(*fname);
         if (!doc) {
-            fmt::print(stderr, "nhtmlc: error: {}\n", doc.error());
+            fmt::print(stderr, "nhtmlc: {}\n", doc.error());
             return 1;
         }
 
@@ -25,7 +25,7 @@ int main(int argc, char** argv) {
         auto ofile = options::get<"-o">();
         FILE* f = ofile ? fopen(ofile->c_str(), "w") : stdout;
         if (!f) {
-            fmt::print(stderr, "nhtmlc: error: could not open output file '{}'\n", ofile ? *ofile : "stdout");
+            fmt::print(stderr, "nhtmlc: could not open output file '{}'\n", ofile ? *ofile : "stdout");
             return 1;
         }
 
@@ -37,6 +37,6 @@ int main(int argc, char** argv) {
     }
 
     /// Currently not implemented.
-    fmt::print(stderr, "nhtmlc: error: directory compilation is not implemented yet\n");
+    fmt::print(stderr, "nhtmlc: directory compilation is not implemented yet\n");
     return 1;
 }

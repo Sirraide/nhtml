@@ -159,12 +159,16 @@ struct html_writer {
         /// Write attributes.
         if (not el.class_list.empty()) {
             write(" class=\"");
-            for (usz j = 0; j < el.class_list.size(); ++j) {
-                if (j) write(" ");
-                write("{}", el.class_list[j]);
+            for (auto it = el.class_list.begin(); it != el.class_list.end(); ++it) {
+                if (it != el.class_list.begin()) write(" ");
+                write("{}", *it);
             }
             write("\"");
         }
+
+        /// Write ID.
+        if (not el.id.empty()) write(" id=\"{}\"", el.id);
+
         write(">"); // clang-format off
 
         /// Write content.
