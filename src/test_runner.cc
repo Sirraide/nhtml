@@ -350,6 +350,7 @@ void run_test(const fs::path& path, size_t id) {
 
         /// Test passed.
         tests_passed[id]++;
+        print("\033[32m[Passed]\033[33m {}\n", basename);
     }
     CATCH()
 }
