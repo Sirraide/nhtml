@@ -1,0 +1,12 @@
+## IDE and editor files.
+.idea/
+.vscode/
+.cache/
+
+## Build files.
+out/
+nhtml
+nhtml.exe
+
+## Valgrind.
+callgrind.out.*

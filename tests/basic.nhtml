@@ -1,0 +1,5 @@
+/// Two nested divs
+div {
+    div {
+    }
+}

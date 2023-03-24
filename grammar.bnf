@@ -1,0 +1,6 @@
+<document> ::= { <element> }
+<element>  ::= <element-named> | <element-text>
+<element-named> ::= NAME [ <content> ]
+<element-text>  ::= [ TEXT ] <text-body>
+<text-body> ::= "(" TOKENS ")"
+<content>  ::= "{" { <element> } "}" | <text-body>

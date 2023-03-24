@@ -1,0 +1,838 @@
+#include <deque>
+#include <fcntl.h>
+#include <fmt/color.h>
+#include <nhtml/parser.hh>
+#include <sys/mman.h>
+#include <sys/stat.h>
+
+namespace nhtml::detail {
+namespace {
+struct parser;
+using el = element::ptr;
+using err = std::unexpected<std::string>;
+
+/// Helper to make an error.
+template <typename... arguments>
+auto mkerr(fmt::format_string<arguments...> fmt, arguments&&... args) -> std::unexpected<std::string> {
+    return std::unexpected{fmt::format(fmt, std::forward<arguments>(args)...)};
+}
+
+#define check NHTML_CHECK
+
+/// ===========================================================================
+///  Tokens
+/// ===========================================================================
+enum struct tk {
+    invalid,
+    eof,
+    name,
+    number,
+    string,
+
+    lbrace,
+    rbrace,
+    lparen,
+    rparen,
+};
+
+/// A token.
+struct token {
+    /// The type of the token.
+    tk type = tk::invalid;
+
+    /// Token text.
+    std::string text;
+
+    /// Number.
+    isz integer;
+
+    /// Source location.
+    loc location;
+};
+
+/// Stringify a token type.
+auto tk_to_str(tk t) -> std::string_view {
+    switch (t) {
+        case tk::invalid: return "invalid token";
+        case tk::eof: return "eof";
+        case tk::name: return "name";
+        case tk::number: return "number";
+        case tk::string: return "string";
+        case tk::lbrace: return "lbrace";
+        case tk::rbrace: return "rbrace";
+        case tk::lparen: return "lparen";
+        case tk::rparen: return "rparen";
+    }
+    return "<unknown>";
+}
+
+/// ===========================================================================
+///  Diagnostics.
+/// ===========================================================================
+/// Diagnostic severity.
+enum struct diag_kind {
+    error,
+    warning,
+    note,
+    none,
+};
+
+/// Get the colour of a diagnostic.
+static constexpr auto diag_colour(diag_kind kind) {
+    switch (kind) {
+        case diag_kind::error: return fmt::fg(fmt::terminal_color::red) | fmt::emphasis::bold;
+        case diag_kind::warning: return fmt::fg(fmt::terminal_color::yellow) | fmt::emphasis::bold;
+        case diag_kind::note: return fmt::fg(fmt::terminal_color::green) | fmt::emphasis::bold;
+        default: return fmt::text_style{};
+    }
+}
+
+/// Get the name of a diagnostic.
+static constexpr std::string_view diag_name(diag_kind kind) {
+    switch (kind) {
+        case diag_kind::error: return "Error";
+        case diag_kind::warning: return "Warning";
+        case diag_kind::note: return "Note";
+        default: return "Diagnostic";
+    }
+}
+
+/// A source file.
+struct file {
+    string_ref contents;
+    fs::path name;
+    fs::path parent_directory;
+
+    static auto map(fs::path filename) -> std::expected<file, std::string> {
+        file f;
+
+        /// Open.
+        int fd = ::open(filename.c_str(), O_RDONLY);
+        if (fd < 0) [[unlikely]]
+            return mkerr("Could not open file: {}: {}", filename.native(), std::strerror(errno));
+
+        /// Get size.
+        struct stat s {};
+        if (::fstat(fd, &s)) [[unlikely]]
+            return mkerr("Could not stat file: {}: {}", filename.native(), std::strerror(errno));
+        auto sz = size_t(s.st_size);
+
+        /// If the size is not zero, map the file. Otherwise, set the contents to the empty string.
+        if (sz != 0) [[likely]] {
+            /// Map.
+            auto* mem = (char*) ::mmap(nullptr, sz, PROT_READ | PROT_WRITE, MAP_PRIVATE, fd, 0);
+            if (mem == MAP_FAILED) [[unlikely]]
+                return mkerr("Could not mmap file: {}: {}", filename.native(), std::strerror(errno));
+            ::close(fd);
+
+            /// Copy to string.
+            f.contents = std::string{mem, sz};
+
+            /// Unmap.
+            if (::munmap(mem, sz)) [[unlikely]]
+                return mkerr("Could not munmap file: {}: {}", filename.native(), std::strerror(errno));
+        } else [[unlikely]] {
+            f.contents = "";
+        }
+
+        /// Set the parent path name.
+        f.parent_directory = get_parent_directory(filename);
+        f.name = std::move(filename);
+        return f;
+    }
+
+    static auto get_parent_directory(const fs::path& filename) -> fs::path {
+        /// Determine the parent directory of the file.
+        /// If the path has a parent, use that.
+        std::error_code ec;
+        if (not filename.has_parent_path()) {
+            auto par = filename.parent_path();
+            auto par_canon = fs::canonical(par, ec);
+            if (not ec and fs::exists(par_canon, ec) and fs::is_directory(par_canon, ec) and not ec) return par_canon;
+        }
+
+        /// Otherwise, use the current working directory.
+        auto path = fs::current_path(ec);
+        if (ec) return "";
+        return path;
+    }
+};
+
+/// A lexer that reads a source file and provides tokens from it.
+struct lexer {
+    /// Owning Parser.
+    parser& p;
+
+    /// The file being lexed.
+    usz file_index;
+
+    /// The current token.
+    token tok{};
+
+    /// Current position in the source code.
+    const char* curr{};
+    const char* end{};
+
+    /// The last character lexer.
+    char lastc = ' ';
+
+    /// Lookahead tokens.
+    std::vector<token> lookahead_tokens;
+
+    /// Disable special handling for tokens. This is used for lexing __id.
+    bool raw_mode = false;
+
+    /// Construct a lexer to lex a file.
+    explicit lexer(parser& _p, usz _f)
+        : p(_p)
+        , file_index(_f) {}
+
+    /// Copying/Moving is disallowed.
+    lexer(const lexer&) = delete;
+    lexer(lexer&&) = delete;
+    lexer& operator=(const lexer&) = delete;
+    lexer& operator=(lexer&&) = delete;
+
+    /// Initialise the lexer.
+    auto init() -> res<void>;
+
+    /// Issue a diagnostic.
+    template <typename... arguments>
+    [[nodiscard]] auto diag(diag_kind kind, loc l, fmt::format_string<arguments...> fmt, arguments&&... args) -> std::unexpected<std::string>;
+
+    /// Get the location of lastc.
+    [[nodiscard]] auto lastc_loc() const -> loc;
+
+    /// Look ahead in the token list.
+    auto look_ahead(usz number_of_tokens) -> res<token*>;
+
+    /// Read the next token.
+    auto next() -> res<void>;
+
+    /// Read the next character.
+    void next_char();
+
+    /// Read until a character.
+    auto read_until_char(char c) -> res<std::string>;
+
+    /// Skip a line.
+    void skip_line();
+
+    /// Skip whitespace.
+    void skip_whitespace();
+
+private:
+    void lex_identifier();
+
+    auto lex_number() -> res<void>;
+
+    auto lex_string(char delim) -> res<void>;
+};
+
+/// ===========================================================================
+///  Parser
+/// ===========================================================================
+struct parser {
+    /// Owned files.
+    std::vector<file> files;
+
+    /// Owned lexers.
+    std::deque<lexer> lexers;
+
+    /// Lexer stack.
+    std::vector<lexer*> lexer_stack;
+
+    /// Parsed document.
+    document doc;
+
+#define advance()                                                \
+    do {                                                         \
+        auto r = lex().next();                                   \
+        if (not r) return std::unexpected{std::move(r.error())}; \
+    } while (false)
+
+    /// Parser primitives.
+    auto lex() -> lexer& { return *lexer_stack.back(); }
+    auto curr() -> token& { return lex().tok; }
+    bool at(tk t) { return curr().type == t; }
+    auto consume(tk t) -> res<bool> {
+        if (at(t)) {
+            advance();
+            return true;
+        }
+        return false;
+    }
+
+    /// Issue a diagnostic.
+    template <typename... arguments>
+    auto diag(diag_kind kind, loc where, fmt::format_string<arguments...> fmt, arguments&&... args) -> std::unexpected<std::string> {
+        using fmt::fg;
+        using enum fmt::emphasis;
+        using enum fmt::terminal_color;
+
+        /// If this diagnostic is suppressed, do nothing.
+        if (kind == diag_kind::none) return err(""s);
+
+        /// Output string.
+        std::string out;
+
+        /// If the location is invalid, either because the specified file does not
+        /// exists, its position is out of bounds or 0, or its length is 0, then we
+        /// skip printing the location.
+        if (not seekable(where)) {
+            /// Even if the location is invalid, print the file name if we can.
+            if (where.file < files.size()) {
+                const auto& file = files[where.file];
+                out += fmt::format(bold, "{}: ", file.name.native());
+            }
+
+            /// Print the message.
+            out += fmt::format(diag_colour(kind), "{}: ", diag_name(kind));
+            out += fmt::format(fmt, std::forward<arguments>(args)...);
+            out += fmt::format("\n");
+            return err(out);
+        }
+
+        /// If the location is valid, get the line, line number, and column number.
+        const auto [line, col, line_start, line_end] = seek(where);
+
+        /// Split the line into everything before the range, the range itself,
+        /// and everything after.
+        std::string before(line_start, col);
+        std::string range(line_start + col, where.len);
+        std::string after(line_start + col + where.len, line_end);
+
+        /// Replace tabs with spaces. We need to do this *after* splitting
+        /// because this invalidates the offsets.
+        replace_all(before, "\t", "    ");
+        replace_all(range, "\t", "    ");
+        replace_all(after, "\t", "    ");
+
+        /// Print the file name, line number, and column number.
+        const auto& file = files[where.file];
+        out += fmt::format(bold, "{}:{}:{}: ", file.name.native(), line, col);
+
+        /// Print the diagnostic name and message.
+        out += fmt::format(diag_colour(kind), "{}: ", diag_name(kind));
+        out += fmt::format(fmt, std::forward<arguments>(args)...);
+        out += fmt::format("\n");
+
+        /// Print the line up to the start of the location, the range in the right
+        /// colour, and the rest of the line.
+        out += fmt::format(" {} | {}", line, before);
+        out += fmt::format(diag_colour(kind), "{}", range);
+        out += fmt::format("{}\n", after);
+
+        /// Determine the number of digits in the line number.
+        const auto digits = number_width(line);
+
+        /// Underline the range. For that, we first pad the line based on the number
+        /// of digits in the line number and append more spaces to line us up with
+        /// the range.
+        NHTML_REPEAT (digits + before.size() + sizeof("  | ") - 1) out += fmt::format(" ");
+
+        /// Finally, underline the range.
+        NHTML_REPEAT (range.size()) out += fmt::format(diag_colour(kind), "~");
+        out += fmt::format("\n");
+        return err(out);
+    }
+
+    /// Parse the input.
+    /// <document> ::= { <element> }
+    auto parse() -> res<document> {
+        /// No input.
+        if (files.empty()) return std::move(doc);
+
+        /// Create a lexer for the first file.
+        lexers.emplace_back(*this, 0);
+        auto& l = lexers.back();
+        lexer_stack.push_back(&l);
+        check(l.init());
+
+        /// Parse the document.
+        while (l.tok.type != tk::eof) {
+            /// Parse an element.
+            auto e = parse_element();
+            if (not e) return err{e.error()};
+            doc.elements.push_back(std::move(*e));
+        }
+
+        /// Return the document.
+        return std::move(doc);
+    }
+
+    /// Parse an element.
+    /// <element>  ::= <element-named> | <element-text>
+    auto parse_element() -> res<el> {
+        switch (curr().type) {
+            case tk::name: return parse_named_element();
+            default: return diag(diag_kind::error, curr().location, "Expected element, got {}", tk_to_str(curr().type));
+        }
+    }
+
+    /// Parse a named element.
+    /// <element-named> ::= NAME [ <content> ]
+    /// <element-text>  ::= [ TEXT ] <text-body>
+    /// <content>  ::= "{" { <element> } "}" | <text-body>
+    auto parse_named_element() -> res<el> {
+        /// Parse the name.
+        auto name = tolower(curr().text);
+        advance();
+
+        /// Text element.
+        if (name == "text") return parse_text_elem();
+
+        /// Element contains other elements.
+        if (consume(tk::lbrace)) {
+            /// Parse the elements.
+            std::vector<el> elements;
+            while (not at(tk::rbrace)) {
+                auto e = parse_element();
+                if (not e) return err{e.error()};
+                elements.push_back(std::move(*e));
+            }
+
+            /// Yeet "}".
+            if (not consume(tk::rbrace)) return diag(diag_kind::error, curr().location, "Expected '}}', got {}", tk_to_str(curr().type));
+
+            /// Return the element.
+            return element::make(std::move(name), std::move(elements));
+        }
+
+        /// Element contains only text.
+        if (consume(tk::lparen)) {
+            /// Parse the text.
+            auto text = parse_text_elem();
+            if (not text) return err{text.error()};
+            return element::make(std::move(name), std::move(*text));
+        }
+
+        /// Element is empty.
+        return element::make(std::move(name));
+    }
+
+    /// Parse element text body.
+    /// <text-body>  ::= "(" TOKENS ")"
+    auto parse_text_elem() -> res<el> {
+        /// Must be at '('.
+        if (not at(tk::lparen)) return diag(diag_kind::error, curr().location, "Expected '(', got {}", tk_to_str(curr().type));
+
+        /// Get the text.
+        auto text = lex().read_until_char(')');
+
+        /// Must be at ')'.
+        if (not consume(tk::rparen)) return diag(diag_kind::error, curr().location, "Expected ')', got {}", tk_to_str(curr().type));
+
+        /// Create the text element.
+        auto e = element::make();
+        e->tag_name = "text";
+        e->content = std::move(*text);
+        return e;
+    }
+
+    [[nodiscard]] bool seekable(loc l) const {
+        if (l.file >= files.size()) return false;
+        const auto& f = files[l.file];
+        return usz(l.pos) + l.len <= f.contents.size() and l.len;
+    }
+
+    /// Seek to a source location. The location must be valid.
+    [[nodiscard]] auto seek(loc l) const -> loc_info {
+        loc_info info{};
+
+        /// Get the file that the location is in.
+        const auto& f = files[l.file];
+
+        /// Seek back to the start of the line.
+        const char* const data = f.contents.data();
+        info.line_start = data + l.pos;
+        while (info.line_start > data and *info.line_start != '\n') info.line_start--;
+        if (*info.line_start == '\n') info.line_start++;
+
+        /// Seek forward to the end of the line.
+        const char* const end = data + f.contents.size();
+        info.line_end = data + l.pos + l.len;
+        while (info.line_end < end and *info.line_end != '\n') info.line_end++;
+
+        /// Determine the line and column number.
+        info.line = 1;
+        for (const char* d = data; d < data + l.pos; d++) {
+            if (*d == '\n') {
+                info.line++;
+                info.col = 0;
+            } else {
+                info.col++;
+            }
+        }
+
+        /// Done!
+        return info;
+    }
+};
+
+/// Check if a character is allowed at the start of an identifier.
+constexpr bool isstart(char c) {
+    return isalpha(c) or c == '_' or c == '$';
+}
+
+/// Check if a character is allowed in an identifier.
+constexpr bool iscontinue(char c) {
+    return isstart(c) or isdigit(c) or c == '-' or c == '!' or c == '?';
+}
+
+constexpr bool is_binary(char c) { return c == '0' or c == '1'; }
+constexpr bool is_decimal(char c) { return c >= '0' and c <= '9'; }
+constexpr bool is_octal(char c) { return c >= '0' and c <= '7'; }
+constexpr bool is_hex(char c) { return (c >= '0' and c <= '9') or (c >= 'a' and c <= 'f') or (c >= 'A' and c <= 'F'); }
+
+/// ========================================================================
+///  Lexer — Implementation.
+/// ========================================================================
+auto lexer::init() -> res<void> {
+    tok.location.file = static_cast<u16>(file_index);
+    curr = p.files[file_index].contents.data();
+    end = curr + p.files[file_index].contents.size();
+    next_char();
+    check(next());
+    return {};
+}
+
+auto lexer::lastc_loc() const -> loc {
+    loc l;
+    l.pos = static_cast<u32>(curr - p.files[file_index].contents.data() - 1);
+    l.len = 1;
+    l.file = static_cast<u16>(file_index);
+    return l;
+}
+
+template <typename... arguments>
+auto lexer::diag(diag_kind kind, loc l, fmt::format_string<arguments...> fmt, arguments&&... args) -> std::unexpected<std::string> {
+    return p.diag(kind, l, fmt, std::forward<arguments>(args)...);
+}
+
+auto lexer::look_ahead(usz number_of_tokens) -> res<token*> {
+    /// If we don't have enough tokens, lex them.
+    if (lookahead_tokens.size() <= number_of_tokens) {
+        auto current_token = std::move(tok);
+        while (lookahead_tokens.size() < number_of_tokens) {
+            check(next());
+            lookahead_tokens.push_back(std::move(tok));
+            tok = {};
+        }
+        tok = std::move(current_token);
+    }
+
+    /// Return the token.
+    return &lookahead_tokens[number_of_tokens - 1];
+}
+
+auto lexer::next() -> res<void> {
+    /// Pop lookahead tokens.
+    if (not lookahead_tokens.empty()) {
+        tok = std::move(lookahead_tokens.back());
+        lookahead_tokens.pop_back();
+        return {};
+    }
+
+    /// Skip whitespace.
+    skip_whitespace();
+
+    /// Keep returning EOF if we're at EOF.
+    if (lastc == 0) {
+        tok.type = tk::eof;
+        return {};
+    }
+
+    /// Reset the token. We set the token type to 'invalid' here so that,
+    /// if we encounter an error, we can just issue a diagnostic and return
+    /// without setting the token type. The parser will then stop because
+    /// it encounters an invalid token.
+    tok.type = tk::invalid;
+    tok.location.pos = static_cast<u32>(curr - p.files[file_index].contents.data() - 1);
+
+    /// Lex the token.
+    switch (lastc) {
+        case '(':
+            next_char();
+            tok.type = tk::lparen;
+            break;
+
+        case ')':
+            next_char();
+            tok.type = tk::rparen;
+            break;
+
+        case '{':
+            next_char();
+            tok.type = tk::lbrace;
+            break;
+
+        case '}':
+            next_char();
+            tok.type = tk::rbrace;
+            break;
+
+        /// Maybe comment.
+        case '/':
+            /// Lookahead to see if this is a comment.
+            if (curr < end and *curr == '/') {
+                skip_line();
+                return next();
+            }
+
+            /// Not a comment. Handle in default case.
+            [[fallthrough]];
+
+        default:
+            /// Characters that delimit a name.
+            static constexpr auto name_delims = "(){} \t\r\n\f\v"sv;
+
+            tok.type = tk::name;
+            tok.text.clear();
+            while (not name_delims.contains(lastc)) {
+                tok.text += lastc;
+                next_char();
+            }
+            break;
+    }
+
+    /// Set the end of the token.
+    tok.location.len = static_cast<u16>(curr - p.files[file_index].contents.data() - tok.location.pos - 1);
+    if (curr == end and not lastc) tok.location.len++;
+    return {};
+}
+
+void lexer::next_char() {
+    if (curr == end) {
+        lastc = 0;
+        return;
+    }
+
+    lastc = *curr++;
+
+    /// Collapse CRLF and LFCR to a single newline,
+    /// but keep CRCR and LFLF as two newlines.
+    if (lastc == '\r' || lastc == '\n') {
+        /// Two newlines in a row.
+        if (curr != end && (*curr == '\r' || *curr == '\n')) {
+            bool same = lastc == *curr;
+            lastc = '\n';
+
+            /// CRCR or LFLF.
+            if (same) return;
+
+            /// CRLF or LFCR.
+            curr++;
+        }
+
+        /// Either CR or LF followed by something else.
+        lastc = '\n';
+    }
+}
+
+auto lexer::read_until_char(char c) -> res<std::string> {
+    std::string s;
+    while (lastc != c && lastc != 0) {
+        s += lastc;
+        next_char();
+    }
+
+    /// Check for EOF.
+    if (lastc == 0) return diag(diag_kind::error, loc{}, "Unexpected end of file while looking for '{}'", c);
+
+    /// Get the next token.
+    check(next());
+
+    /// Return lexed text.
+    return s;
+}
+
+void lexer::skip_line() {
+    while (lastc != '\n' && lastc != 0) next_char();
+}
+
+void lexer::skip_whitespace() {
+    while (std::isspace(lastc)) next_char();
+}
+
+auto lexer::lex_number() -> res<void> {
+    /// Helper function that actually parses a number.
+    auto lex_number_impl = [this](bool pred(char), usz conv(char), usz base) -> res<void> {
+        /// Need at least one digit.
+        if (not pred(lastc)) return diag(diag_kind::error, lastc_loc() << 1 <<= 1, "Invalid integer literal");
+
+        /// Parse the literal.
+        usz value{};
+        do {
+            usz old_value = value;
+            value *= base;
+
+            /// Check for overflow.
+            if (value < old_value) {
+            overflow:
+                /// Consume the remaining digits so we can highlight the entire thing in the error.
+                while (pred(lastc)) next_char();
+                return diag(diag_kind::error, loc{tok.location.pos, lastc_loc()} >>= -1, "Integer literal overflow");
+            }
+
+            /// Add the next digit.
+            old_value = value;
+            value += conv(lastc);
+            if (value < old_value) goto overflow;
+
+            /// Yeet it.
+            next_char();
+        } while (pred(lastc));
+
+        /// The next character must not be a start character.
+        if (isstart(lastc))
+            return diag(diag_kind::error, loc{tok.location.pos, lastc_loc()}, "Invalid character in integer literal: '{}'", lastc);
+
+        /// We have a valid integer literal!
+        tok.type = tk::number;
+        tok.integer = isz(value);
+        return {};
+    };
+
+    /// If the first character is a 0, then this might be a non-decimal constant.
+    if (lastc == 0) {
+        next_char();
+
+        /// Hexadecimal literal.
+        if (lastc == 'x' or lastc == 'X') {
+            next_char();
+            static const auto xctoi = [](char c) -> usz {
+                switch (c) {
+                    case '0' ... '9': return static_cast<usz>(c - '0');
+                    case 'a' ... 'f': return static_cast<usz>(c - 'a');
+                    case 'A' ... 'F': return static_cast<usz>(c - 'A');
+                    default: NHTML_UNREACHABLE();
+                }
+            };
+            return lex_number_impl(is_hex, xctoi, 16);
+        }
+
+        /// Octal literal.
+        if (lastc == 'o' or lastc == 'O') {
+            next_char();
+            return lex_number_impl(
+                is_octal,
+                [](char c) { return static_cast<usz>(c - '0'); },
+                8
+            );
+        }
+
+        /// Binary literal.
+        if (lastc == 'b' or lastc == 'B') {
+            next_char();
+            return lex_number_impl(
+                is_binary,
+                [](char c) { return static_cast<usz>(c - '0'); },
+                2
+            );
+        }
+
+        /// Multiple leading 0’s are not permitted.
+        if (std::isdigit(lastc))
+            return diag(diag_kind::error, lastc_loc() << 1, "Leading 0 in integer literal. (Hint: Use 0o/0O for octal literals)");
+
+        /// Integer literal must be a literal 0.
+        if (isstart(lastc))
+            return diag(diag_kind::error, lastc_loc() <<= 1, "Invalid character in integer literal: '{}'", lastc);
+
+        /// Integer literal is 0.
+        tok.type = tk::number;
+        tok.integer = 0;
+        return {};
+    }
+
+    /// If the first character is not 0, then we have a decimal literal.
+    return lex_number_impl(
+        is_decimal,
+        [](char c) { return static_cast<usz>(c - '0'); },
+        10
+    );
+}
+
+auto lexer::lex_string(char delim) -> res<void> {
+    /// Yeet the delimiter.
+    tok.text.clear();
+    next_char();
+
+    /// Lex the string. If it’s a raw string, we don’t need to
+    /// do any escaping.
+    if (delim == '\'') {
+        while (lastc != delim && lastc != 0) {
+            tok.text += lastc;
+            next_char();
+        }
+    }
+
+    /// Otherwise, we also need to replace escape sequences.
+    else if (delim == '"') {
+        while (lastc != delim && lastc != 0) {
+            if (lastc == '\\') {
+                next_char();
+                switch (lastc) {
+                    case 'a': tok.text += '\a'; break;
+                    case 'b': tok.text += '\b'; break;
+                    case 'f': tok.text += '\f'; break;
+                    case 'n': tok.text += '\n'; break;
+                    case 'r': tok.text += '\r'; break;
+                    case 't': tok.text += '\t'; break;
+                    case 'v': tok.text += '\v'; break;
+                    case '\\': tok.text += '\\'; break;
+                    case '\'': tok.text += '\''; break;
+                    case '"': tok.text += '"'; break;
+                    case '0': tok.text += '\0'; break;
+                    default:
+                        return diag(diag_kind::error, {tok.location.pos, lastc_loc()}, "Invalid escape sequence");
+                }
+            } else {
+                tok.text += lastc;
+            }
+            next_char();
+        }
+    }
+
+    /// Other string delimiters are invalid.
+    else { return diag(diag_kind::error, lastc_loc() << 1, "Invalid delimiter: {}", delim); }
+
+    /// Make sure we actually have a delimiter.
+    if (lastc != delim) return diag(diag_kind::error, lastc_loc() << 1, "Unterminated string literal");
+    next_char();
+
+    /// This is a valid string.
+    tok.type = tk::string;
+    return {};
+}
+
+/// Parse a file.
+auto parse(file&& f) -> std::expected<document, std::string> {
+    parser p;
+    p.files.push_back(std::move(f));
+    return p.parse();
+}
+
+} // namespace
+} // namespace nhtml::detail
+
+/// ===========================================================================
+///  API
+/// ===========================================================================
+auto nhtml::parse(detail::string_ref data, fs::path filename) -> std::expected<document, std::string> {
+    /// Create the file.
+    detail::file f;
+    f.contents = std::move(data);
+    f.parent_directory = detail::file::get_parent_directory(filename);
+    f.name = std::move(filename);
+
+    /// Parse it.
+    return detail::parse(std::move(f));
+}
+
+auto nhtml::parse_file(fs::path filename) -> std::expected<document, std::string> {
+    auto f = detail::file::map(std::move(filename));
+    if (not f) return std::unexpected{f.error()};
+    return detail::parse(std::move(f.value()));
+}

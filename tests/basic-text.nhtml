@@ -1,0 +1,4 @@
+div {
+    div { text (text1) }
+    p { text (text2) }
+}
