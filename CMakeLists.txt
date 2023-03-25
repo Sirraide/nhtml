@@ -108,6 +108,9 @@ if (NOT MSVC)
         $<$<CONFIG:DEBUG>:-O0 -g3 -ggdb3 -rdynamic>
         $<$<CONFIG:RELEASE>:-O3 -march=native>
     )
+    target_compile_definitions(options INTERFACE
+        $<$<CONFIG:DEBUG>:_GLIBCXX_DEBUG=1>
+    )
 else()
     target_compile_options(options INTERFACE
         $<$<CONFIG:DEBUG>:/Od>

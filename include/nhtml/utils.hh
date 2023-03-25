@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <debug/map>
 #include <expected>
 #include <filesystem>
 #include <fmt/format.h>
@@ -174,6 +175,30 @@ struct [[nodiscard]] res<bool> : std::expected<bool, std::string> {
     [[nodiscard]] bool is_error() const { return not base::operator bool(); }
 };
 
+/// Case-insensitive string map.
+template <typename value_type>
+class icase_map {
+    using map_type = std::map<std::string, value_type>;
+    map_type map{};
+
+public:
+    /// Insert or get a value.
+    ///
+    /// Note: We accept a string by value since we need to transform
+    /// it to lowercase anyway to look up the value.
+    [[nodiscard]] auto operator[](std::string key) -> value_type& { return map[tolower(std::move(key))]; }
+
+    /// Insert a value only if it doesn’t already exist.
+    /// \return true if the value was inserted, false if it already existed.
+    [[nodiscard]] bool try_emplace(std::string key, value_type value) {
+        auto [it, inserted] = map.try_emplace(tolower(std::move(key)), std::move(value));
+        return inserted;
+    }
+
+    auto begin() const { return map.begin(); }
+    auto end() const { return map.end(); }
+};
+
 /// Replace all occurrences of `from` with `to` in `str`.
 [[gnu::always_inline]] constexpr void replace_all(
     std::string& str,
@@ -199,8 +224,6 @@ auto trim(is<std::string> auto&& s) -> decltype(s) {
     s.erase(std::find_if(s.rbegin(), s.rend(), [](int ch) { return !std::isspace(ch); }).base(), s.end());
     return std::forward<decltype(s)>(s);
 }
-
-/// Trim a string.
 
 } // namespace detail
 

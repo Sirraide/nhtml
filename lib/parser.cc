@@ -2,6 +2,7 @@
 #include <fmt/color.h>
 #include <nhtml/parser.hh>
 #include <unordered_set>
+#include <utility>
 
 namespace nhtml::detail {
 namespace {
@@ -25,8 +26,13 @@ enum struct tk {
 
     lbrace,
     rbrace,
+    lbrack,
+    rbrack,
     lparen,
     rparen,
+
+    eq,
+    comma,
 };
 
 /// A token.
@@ -48,16 +54,20 @@ struct token {
 auto tk_to_str(tk t) -> std::string_view {
     switch (t) {
         case tk::invalid: return "invalid token";
-        case tk::eof: return "eof";
+        case tk::eof: return "end of file";
         case tk::name: return "name";
-        case tk::class_name: return "class";
-        case tk::id: return "id";
+        case tk::class_name: return ".class";
+        case tk::id: return "#id";
         case tk::number: return "number";
         case tk::string: return "string";
-        case tk::lbrace: return "lbrace";
-        case tk::rbrace: return "rbrace";
-        case tk::lparen: return "lparen";
-        case tk::rparen: return "rparen";
+        case tk::lbrace: return "{";
+        case tk::rbrace: return "}";
+        case tk::lbrack: return "[";
+        case tk::rbrack: return "]";
+        case tk::lparen: return "(";
+        case tk::rparen: return ")";
+        case tk::eq: return "=";
+        case tk::comma: return ",";
     }
     return "<unknown>";
 }
@@ -268,7 +278,7 @@ struct parser {
         /// Reads a name.
         auto read_name = [this] {
             /// Characters that delimit a name.
-            static constexpr auto name_delims = "(){}.# \t\r\n\f\v"sv;
+            static constexpr auto name_delims = "()[]{}.,#= \t\r\n\f\v"sv;
 
             tok.type = tk::name;
             tok.text.clear();
@@ -283,6 +293,16 @@ struct parser {
             case '(':
                 next_char();
                 tok.type = tk::lparen;
+                break;
+
+            case '[':
+                next_char();
+                tok.type = tk::lbrack;
+                break;
+
+            case ']':
+                next_char();
+                tok.type = tk::rbrack;
                 break;
 
             case ')':
@@ -325,6 +345,18 @@ struct parser {
                 tok.type = tk::id;
                 break;
 
+            /// Equals sign.
+            case '=':
+                next_char();
+                tok.type = tk::eq;
+                break;
+
+            /// Comma.
+            case ',':
+                next_char();
+                tok.type = tk::comma;
+                break;
+
             default:
             default_case:
                 read_name();
@@ -365,15 +397,25 @@ struct parser {
         }
     }
 
-    auto read_until_char(char c) -> res<std::string> {
+    auto read_until_chars(std::same_as<char> auto... c) -> res<std::string>
+    requires (sizeof...(c) >= 1)
+    {
         std::string s;
-        while (lastc != c && lastc != 0) {
+        while (((lastc != c) and ...) and lastc != 0) {
             s += lastc;
             next_char();
         }
 
         /// Check for EOF.
-        if (lastc == 0) return diag(diag_kind::error, loc{}, "Unexpected end of file while looking for '{}'", c);
+        if (lastc == 0) {
+            if constexpr (sizeof...(c) == 1) return diag(diag_kind::error, loc{}, "Unexpected end of file while looking for '{}'", c...);
+            else {
+                std::string chars;
+                ((chars += fmt::format("'{}', ", c)), ...);
+                chars.pop_back(), chars.pop_back();
+                return diag(diag_kind::error, loc{}, "Unexpected end of file while looking for one of {}", std::move(chars));
+            }
+        }
 
         /// Get the next token.
         check(next());
@@ -591,7 +633,7 @@ struct parser {
     } while (false)
 
     /// Parser primitives.
-    bool at(tk t) { return tok.type == t; }
+    bool at(std::same_as<tk> auto&&... t) { return ((tok.type == t) or ...); }
 
     /// Add a file.
     auto add_file(file&& f) -> res<void> {
@@ -641,18 +683,25 @@ struct parser {
                 return parse_named_element(std::move(name));
             }
 
-            /// Implicit div.
+            /// Class.
             case tk::class_name: {
                 auto cl = tok.text;
                 advance();
                 return parse_named_element("div"s, {std::move(cl)});
             }
 
-            /// Implicit div.
+            /// ID.
             case tk::id: {
                 auto id = tok.text;
                 advance();
                 return parse_named_element("div"s, {}, std::move(id));
+            }
+
+            /// Attribute list.
+            case tk::lbrack: {
+                element::attribute_list attrs;
+                check(parse_attribute_list(attrs));
+                return parse_named_element("div"s, {}, "", std::move(attrs));
             }
 
             default: return diag(diag_kind::error, tok.location, "Expected element, got {}", tk_to_str(tok.type));
@@ -660,31 +709,49 @@ struct parser {
     }
 
     /// Parse a named element.
+    ///
     /// <element-named> ::= NAME <element-named-rest>
-    /// <element-implicit-div> ::= ( CLASS | ID) <element-named-rest>
-    /// <element-named-rest> ::= { CLASS | ID } [ <content> ]
+    /// <element-implicit-div> ::= ( <attr-list> | CLASS | ID) <element-named-rest>
+    /// <element-named-rest> ::= { <attr-list> | CLASS | ID } [ <content> ]
     /// <element-text>  ::= [ TEXT ] <text-body>
     /// <content>  ::= "{" { <element> } "}" | <text-body>
-    auto parse_named_element(std::string name, std::set<std::string> classes = {}, std::string id = "") -> res<el> {
+    auto parse_named_element(
+        std::string name,
+        element::class_list classes = {},
+        std::string id = "",
+        element::attribute_list attributes = {}
+    ) -> res<el> {
         /// Text element.
         if (name == "text") return parse_text_elem();
 
         /// Parse the classes.
-        while (at(tk::class_name) or at(tk::id)) {
-            if (at(tk::id)) {
-                if (not id.empty()) return diag(diag_kind::error, tok.location, "Element already has an ID");
-                id = trim(tok.text);
-            } else {
-                classes.insert(trim(tolower(tok.text)));
+        while (at(tk::class_name, tk::id, tk::lbrack)) {
+            switch (tok.type) {
+                case tk::class_name:
+                    classes.insert(trim(tolower(tok.text)));
+                    advance();
+                    break;
+
+                case tk::id:
+                    if (not id.empty()) return diag(diag_kind::error, tok.location, "Element already has an ID");
+                    id = trim(tok.text);
+                    advance();
+                    break;
+
+                case tk::lbrack:
+                    check(parse_attribute_list(attributes));
+                    break;
+
+                default: std::unreachable();
             }
-            advance();
         }
 
         /// Create an element, attach classes, etc.
         auto make = [&](auto&&... args) -> el {
             auto e = element::make(NHTML_FWD(args)...);
-            e->class_list = std::move(classes);
+            e->classes = std::move(classes);
             e->id = std::move(id);
+            e->attributes = std::move(attributes);
             return e;
         };
 
@@ -712,7 +779,7 @@ struct parser {
         if (at(tk::lparen)) {
             /// Parse the text.
             auto text = parse_text_elem();
-            if (not text) return err{text.error()};
+            if (not text) return err{std::move(text.error())};
             return make(std::move(name), std::move(*text));
         }
 
@@ -727,7 +794,7 @@ struct parser {
         if (not at(tk::lparen)) return diag(diag_kind::error, tok.location, "Expected '(', got {}", tk_to_str(tok.type));
 
         /// Get the text.
-        auto text = read_until_char(')');
+        auto text = read_until_chars(')');
 
         /// Must be at ')'.
         if (not at(tk::rparen)) return diag(diag_kind::error, tok.location, "Expected ')', got {}", tk_to_str(tok.type));
@@ -738,6 +805,50 @@ struct parser {
         e->tag_name = "text";
         e->content = std::move(*text);
         return e;
+    }
+
+    /// Parse a list of attributes.
+    /// <attr-list> ::= "[" { <attr> [ "," ] } "]"
+    /// <attr> ::= NAME "=" VALUE
+    auto parse_attribute_list(element::attribute_list& attrs) -> res<void> {
+        /// Must be at '['.
+        if (not at(tk::lbrack)) return diag(diag_kind::error, tok.location, "Expected '[', got {}", tk_to_str(tok.type));
+        advance();
+
+        /// Parse the attributes.
+        while (not at(tk::rbrack)) {
+            /// Must be at a name.
+            if (not at(tk::name)) return diag(diag_kind::error, tok.location, "Expected attribute name, got {}", tk_to_str(tok.type));
+            auto name = tok.text;
+            auto l = tok.location;
+            advance();
+
+            /// An attribute may, but need not, have a value
+            std::string value;
+            if (at(tk::eq)) {
+                /// Read the value. An attribute value is everything up to the next comma or closing bracket.
+                /// This means that we need to lex manually, for which reason we don’t advance() past the `=`,
+                /// since the parser is currently at the first character after the `=`.
+                auto s = read_until_chars(',', ']');
+                if (not s) return err{std::move(s.error())};
+                value = std::move(*s);
+            }
+
+            /// Add the attribute.
+            if (not attrs.try_emplace(std::move(name), std::move(value)))
+                return diag(diag_kind::error, l, "Duplicate '{}' attribute", name);
+
+            /// Must be at a comma or ']' (end of list).
+            if (not at(tk::rbrack, tk::comma)) return diag(diag_kind::error, tok.location, "Expected ']' or ',', got {}", tk_to_str(tok.type));
+            if (at(tk::comma)) advance();
+        }
+
+        /// Must be at ']'.
+        if (not at(tk::rbrack)) return diag(diag_kind::error, tok.location, "Expected ']', got {}", tk_to_str(tok.type));
+        advance();
+
+        /// Done.
+        return {};
     }
 };
 

@@ -1,0 +1,5 @@
+svg[width=1.5rem, height=1.2rem, version=1.1, viewBox=0 0 1.5rem 1.2rem, xmlns=http://www.w3.org/2000/svg]#hamburger {
+    rect[width=1.5rem, height=.2rem]
+    rect[width=1.5rem, height=.2rem, y=.5rem]
+    rect[width=1.5rem, height=.2rem, y=1rem]
+}

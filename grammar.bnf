@@ -1,8 +1,10 @@
 <document> ::= { <element> }
 <element>  ::= <element-named> | <element-text> | <element-implicit-div>
 <element-named> ::= NAME <element-named-rest>
-<element-implicit-div> ::= ( CLASS | ID) <element-named-rest>
-<element-named-rest> ::= { CLASS | ID } [ <content> ]
+<element-implicit-div> ::= ( <attr-list> | CLASS | ID) <element-named-rest>
+<element-named-rest> ::= { <attr-list> | CLASS | ID } [ <content> ]
+<attr-list> ::= "[" { <attr> [ "," ] } "]"
+<attr> ::= NAME "=" VALUE
 <element-text>  ::= [ TEXT ] <text-body>
 <text-body> ::= "(" TOKENS ")"
 <content>  ::= "{" { <element> } "}" | <text-body>

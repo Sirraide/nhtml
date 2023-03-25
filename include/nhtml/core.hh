@@ -1,6 +1,7 @@
 #ifndef NHTML_CORE_HH
 #define NHTML_CORE_HH
 
+#include <map>
 #include <nhtml/utils.hh>
 #include <optional>
 #include <set>
@@ -12,6 +13,23 @@ namespace nhtml {
 struct element {
     using ptr = std::unique_ptr<element>;
     using vector = std::vector<element::ptr>;
+    using class_list = std::set<std::string>;
+    using attribute_list = detail::icase_map<std::string>;
+
+    /// The element’s name.
+    std::string tag_name;
+
+    /// The element’s classes. Ordered for deterministic output.
+    class_list classes;
+
+    /// The element’s attributes. Ordered for deterministic output.
+    attribute_list attributes;
+
+    /// The element’s ID, if any.
+    std::string id;
+
+    /// The element’s content.
+    std::variant<vector, std::string> content;
 
 private:
     explicit element() {}
@@ -33,18 +51,6 @@ public:
         /// Note: We can’t use std::make_unique here because the constructor is private.
         return ptr{new element{std::forward<arguments>(args)...}};
     }
-
-    /// The element’s name.
-    std::string tag_name;
-
-    /// The element’s classes. Ordered for deterministic output.
-    std::set<std::string> class_list;
-
-    /// The element’s ID, if any.
-    std::string id;
-
-    /// The element’s content.
-    std::variant<vector, std::string> content;
 };
 
 /// An NHTML document.
