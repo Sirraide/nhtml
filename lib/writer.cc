@@ -13,8 +13,8 @@ struct html_writer {
     explicit html_writer(output_type _out, document::write_opts _opts)
         : out(_out)
         , opts(_opts) {
-            if (opts.text_columns == 0) opts.text_columns = 1000000000;
-        }
+        if (opts.text_columns == 0) opts.text_columns = 1000000000;
+    }
 
     /// Write a formatted string to a file or string.
     template <typename... arguments>
@@ -178,29 +178,33 @@ struct html_writer {
         write("<{}", el.tag_name);
 
         /// Escape single quotes.
-        static const auto escape_single_quotes = [](std::string s) {
-            replace_all(s, "'", "&#39;"); /// Note: ASCII 39 = "'".
+        static const auto escape_quotes = [](std::string s, quoting_style sty) {
+            if (sty == quoting_style::single_quotes) replace_all(s, "'", "&#39;"); /// Note: ASCII 39 = "'".
+            else if (sty == quoting_style::double_quotes) replace_all(s, "\"", "&quot;");
+            else NHTML_UNREACHABLE();
             return s;
         };
 
+        /// Quote to use.
+        const auto quote = opts.attribute_quoting_style == quoting_style::single_quotes ? "'" : "\"";
+
         /// Write classes.
         if (not el.classes.empty()) {
-            write(" class='");
+            write(" class={}", quote);
             for (auto it = el.classes.begin(); it != el.classes.end(); ++it) {
                 if (it != el.classes.begin()) write(" ");
-                write("{}", escape_single_quotes(*it));
+                write("{}", escape_quotes(*it, opts.attribute_quoting_style));
             }
-            write("'");
+            write("{}", quote);
         }
 
         /// Write ID.
-        if (not el.id.empty()) write(" id='{}'", escape_single_quotes(el.id));
+        if (not el.id.empty()) write(" id={}{}{}", quote, escape_quotes(el.id, opts.attribute_quoting_style), quote);
 
         /// Write attributes.
         for (const auto& [name, value] : el.attributes) {
-
             /// Emit the attribute.
-            write(" {}='{}'", name, escape_single_quotes(value));
+            write(" {}={}{}{}", name, quote, escape_quotes(value, opts.attribute_quoting_style), quote);
         }
 
         /// Close opening tag. Note the line in case we need to insert a line break later.

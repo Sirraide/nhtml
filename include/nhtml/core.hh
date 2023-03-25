@@ -9,6 +9,12 @@
 #include <vector>
 
 namespace nhtml {
+/// Quoting style for attributes.
+enum struct quoting_style {
+    single_quotes,
+    double_quotes,
+};
+
 /// An NHTML element.
 struct element {
     using ptr = std::unique_ptr<element>;
@@ -61,12 +67,16 @@ struct document {
         static constexpr u64 default_text_columns = 140;
         static constexpr bool default_no_indent = false;
         static constexpr bool default_use_tabs = false;
+        static constexpr quoting_style default_quoting_style = quoting_style::single_quotes;
 
         /// Number of spaces per indentation level. Ignored for tabs.
         u64 indent_width = default_indent_width;
 
         /// Maximum column number.
         u64 text_columns = default_text_columns;
+
+        /// Whether to quote attribute values using single or double quotes.
+        quoting_style attribute_quoting_style = default_quoting_style;
 
         /// Whether to disable indenting.
         bool no_indent = default_no_indent;
