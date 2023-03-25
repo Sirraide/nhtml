@@ -675,33 +675,34 @@ struct parser {
     /// Parse an element.
     /// <element>  ::= <element-named> | <element-text> | <element-implicit-div>
     auto parse_element() -> res<el> {
+        auto l = tok.location;
         switch (tok.type) {
             /// Named element.
             case tk::name: {
                 auto name = tolower(tok.text);
                 advance();
-                return parse_named_element(std::move(name));
+                return parse_named_element(std::move(name), l);
             }
 
             /// Class.
             case tk::class_name: {
                 auto cl = tok.text;
                 advance();
-                return parse_named_element("div"s, {std::move(cl)});
+                return parse_named_element("div"s, l, {std::move(cl)});
             }
 
             /// ID.
             case tk::id: {
                 auto id = tok.text;
                 advance();
-                return parse_named_element("div"s, {}, std::move(id));
+                return parse_named_element("div"s, l, {}, std::move(id));
             }
 
             /// Attribute list.
             case tk::lbrack: {
                 element::attribute_list attrs;
                 check(parse_attribute_list(attrs));
-                return parse_named_element("div"s, {}, "", std::move(attrs));
+                return parse_named_element("div"s, l, {}, "", std::move(attrs));
             }
 
             default: return diag(diag_kind::error, tok.location, "Expected element, got {}", tk_to_str(tok.type));
@@ -717,6 +718,7 @@ struct parser {
     /// <content>  ::= "{" { <element> } "}" | <text-body>
     auto parse_named_element(
         std::string name,
+        loc l,
         element::class_list classes = {},
         std::string id = "",
         element::attribute_list attributes = {}
@@ -747,16 +749,29 @@ struct parser {
         }
 
         /// Create an element, attach classes, etc.
-        auto make = [&](auto&&... args) -> el {
+        auto make = [&](auto&&... args) -> res<el> {
             auto e = element::make(NHTML_FWD(args)...);
             e->classes = std::move(classes);
             e->id = std::move(id);
             e->attributes = std::move(attributes);
+
+            /// If this is a link, then the name is actually ‘a’, and we
+            /// add an implicit href attribute.
+            if (e->tag_name.starts_with('/')) {
+                if (not e->attributes.try_emplace("href", e->tag_name))
+                    return diag(diag_kind::error, l, "Cannot specify href attribute for link");
+                e->tag_name = "a";
+            }
+
             return e;
         };
 
         /// Element contains other elements.
         if (at(tk::lbrace)) {
+            /// Check that this isn’t a link.
+            if (name.starts_with('/')) return diag(diag_kind::error, l, "Links may not contain other elements");
+
+            /// Yeet "{".
             advance();
 
             /// Parse the elements.
