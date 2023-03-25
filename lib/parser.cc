@@ -282,7 +282,7 @@ struct parser {
 
             tok.type = tk::name;
             tok.text.clear();
-            while (not name_delims.contains(lastc)) {
+            while (not name_delims.contains(lastc) and lastc != 0) {
                 tok.text += lastc;
                 next_char();
             }
