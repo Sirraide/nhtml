@@ -120,6 +120,13 @@ struct file {
     fs::path name;
     fs::path parent_directory;
 
+    /// Index of the file in the parser's file list.
+    u16 file_index = 0;
+
+    /// Current position in the file.
+    const char* curr{};
+    const char* end{};
+
     static auto map(fs::path filename) -> std::expected<file, std::string> {
         file f;
 

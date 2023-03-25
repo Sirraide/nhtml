@@ -93,104 +93,53 @@ static constexpr std::string_view diag_name(diag_kind kind) {
     }
 }
 
-/// A lexer that reads a source file and provides tokens from it.
-struct lexer {
-    /// Owning Parser.
-    parser& p;
+/// ===========================================================================
+///  Parser
+/// ===========================================================================
+/// Check if a character is allowed at the start of an identifier.
+constexpr bool isstart(char c) {
+    return isalpha(c) or c == '_' or c == '$';
+}
 
-    /// The file being lexed.
-    usz file_index;
+/// Check if a character is allowed in an identifier.
+constexpr bool iscontinue(char c) {
+    return isstart(c) or isdigit(c) or c == '-' or c == '!' or c == '?';
+}
 
+constexpr bool is_binary(char c) { return c == '0' or c == '1'; }
+constexpr bool is_decimal(char c) { return c >= '0' and c <= '9'; }
+constexpr bool is_octal(char c) { return c >= '0' and c <= '7'; }
+constexpr bool is_hex(char c) { return (c >= '0' and c <= '9') or (c >= 'a' and c <= 'f') or (c >= 'A' and c <= 'F'); }
+
+struct parser {
     /// The current token.
     token tok{};
 
-    /// Current position in the source code.
-    const char* curr{};
-    const char* end{};
-
-    /// The last character lexer.
+    /// The last character lexed.
     char lastc = ' ';
 
     /// Lookahead tokens.
     std::vector<token> lookahead_tokens;
 
-    /// Disable special handling for tokens. This is used for lexing __id.
-    bool raw_mode = false;
-
-    /// Construct a lexer to lex a file.
-    explicit lexer(parser& _p, usz _f)
-        : p(_p)
-        , file_index(_f) {}
-
-    /// Copying/Moving is disallowed.
-    lexer(const lexer&) = delete;
-    lexer(lexer&&) = delete;
-    lexer& operator=(const lexer&) = delete;
-    lexer& operator=(lexer&&) = delete;
-
-    /// Initialise the lexer.
-    auto init() -> res<void>;
-
-    /// Issue a diagnostic.
-    template <typename... arguments>
-    [[nodiscard]] auto diag(diag_kind kind, loc l, fmt::format_string<arguments...> fmt, arguments&&... args) -> std::unexpected<std::string>;
-
-    /// Get the location of lastc.
-    [[nodiscard]] auto lastc_loc() const -> loc;
-
-    /// Look ahead in the token list.
-    auto look_ahead(usz number_of_tokens) -> res<token*>;
-
-    /// Read the next token.
-    auto next() -> res<void>;
-
-    /// Read the next character.
-    void next_char();
-
-    /// Read until a character.
-    auto read_until_char(char c) -> res<std::string>;
-
-    /// Skip a line.
-    void skip_line();
-
-    /// Skip whitespace.
-    void skip_whitespace();
-
-private:
-    void lex_identifier();
-
-    auto lex_number() -> res<void>;
-
-    auto lex_string(char delim) -> res<void>;
-};
-
-/// ===========================================================================
-///  Parser
-/// ===========================================================================
-struct parser {
     /// Owned files.
-    std::vector<file> files;
+    std::deque<file> files;
 
-    /// Owned lexers.
-    std::deque<lexer> lexers;
-
-    /// Lexer stack.
-    std::vector<lexer*> lexer_stack;
+    /// File stack.
+    std::vector<file*> file_stack;
 
     /// Parsed document.
     document doc;
 
-#define advance()                                                \
-    do {                                                         \
-        auto r = lex().next();                                   \
-        if (not r) return std::unexpected{std::move(r.error())}; \
-    } while (false)
+    /// Copying/Moving is disallowed.
+    parser() = default;
+    parser(const parser&) = delete;
+    parser(parser&&) = delete;
+    parser& operator=(const parser&) = delete;
+    parser& operator=(parser&&) = delete;
 
-    /// Parser primitives.
-    auto lex() -> lexer& { return *lexer_stack.back(); }
-    auto curr() -> token& { return lex().tok; }
-    bool at(tk t) { return curr().type == t; }
-
+    /// =======================================================================
+    ///  Lexer Operations
+    /// =======================================================================
     /// Issue a diagnostic.
     template <typename... arguments>
     auto diag(diag_kind kind, loc where, fmt::format_string<arguments...> fmt, arguments&&... args) -> std::unexpected<std::string> {
@@ -265,19 +214,412 @@ struct parser {
         return err(out);
     }
 
+    auto curr() const -> const char* { return file_stack.back()->curr; }
+    auto end() const -> const char* { return file_stack.back()->end; }
+
+    auto lastc_loc() const -> loc {
+        loc l;
+        l.pos = static_cast<u32>(curr() - file_stack.back()->contents.data() - 1);
+        l.len = 1;
+        l.file = static_cast<u16>(file_stack.back()->file_index);
+        return l;
+    }
+
+    auto look_ahead(usz number_of_tokens) -> res<token*> {
+        /// If we don't have enough tokens, lex them.
+        if (lookahead_tokens.size() <= number_of_tokens) {
+            auto current_token = std::move(tok);
+            while (lookahead_tokens.size() < number_of_tokens) {
+                check(next());
+                lookahead_tokens.push_back(std::move(tok));
+                tok = {};
+            }
+            tok = std::move(current_token);
+        }
+
+        /// Return the token.
+        return &lookahead_tokens[number_of_tokens - 1];
+    }
+
+    auto next() -> res<void> {
+        /// Pop lookahead tokens.
+        if (not lookahead_tokens.empty()) {
+            tok = std::move(lookahead_tokens.back());
+            lookahead_tokens.pop_back();
+            return {};
+        }
+
+        /// Skip whitespace.
+        skip_whitespace();
+
+        /// Keep returning EOF if we're at EOF.
+        if (lastc == 0) {
+            tok.type = tk::eof;
+            return {};
+        }
+
+        /// Reset the token. We set the token type to 'invalid' here so that,
+        /// if we encounter an error, we can just issue a diagnostic and return
+        /// without setting the token type. The parser will then stop because
+        /// it encounters an invalid token.
+        tok.type = tk::invalid;
+        tok.location.pos = static_cast<u32>(curr() - file_stack.back()->contents.data() - 1);
+
+        /// Reads a name.
+        auto read_name = [this] {
+            /// Characters that delimit a name.
+            static constexpr auto name_delims = "(){}.# \t\r\n\f\v"sv;
+
+            tok.type = tk::name;
+            tok.text.clear();
+            while (not name_delims.contains(lastc)) {
+                tok.text += lastc;
+                next_char();
+            }
+        };
+
+        /// Lex the token.
+        switch (lastc) {
+            case '(':
+                next_char();
+                tok.type = tk::lparen;
+                break;
+
+            case ')':
+                next_char();
+                tok.type = tk::rparen;
+                break;
+
+            case '{':
+                next_char();
+                tok.type = tk::lbrace;
+                break;
+
+            case '}':
+                next_char();
+                tok.type = tk::rbrace;
+                break;
+
+            /// Maybe comment.
+            case '/':
+                /// Lookahead to see if this is a comment.
+                if (curr() < end() and *curr() == '/') {
+                    skip_line();
+                    return next();
+                }
+
+                /// Not a comment. Handle in default case.
+                goto default_case;
+
+            /// Class.
+            case '.':
+                next_char();
+                read_name();
+                tok.type = tk::class_name;
+                break;
+
+            /// ID.
+            case '#':
+                next_char();
+                read_name();
+                tok.type = tk::id;
+                break;
+
+            default:
+            default_case:
+                read_name();
+                break;
+        }
+
+        /// Set the end of the token.
+        tok.location.len = static_cast<u16>(curr() - file_stack.back()->contents.data() - tok.location.pos - 1);
+        if (curr() == end() and not lastc) tok.location.len++;
+        return {};
+    }
+
+    void next_char() {
+        if (curr() == end()) {
+            lastc = 0;
+            return;
+        }
+
+        lastc = *file_stack.back()->curr++;
+
+        /// Collapse CRLF and LFCR to a single newline,
+        /// but keep CRCR and LFLF as two newlines.
+        if (lastc == '\r' || lastc == '\n') {
+            /// Two newlines in a row.
+            if (curr() != end() && (*curr() == '\r' || *curr() == '\n')) {
+                bool same = lastc == *curr();
+                lastc = '\n';
+
+                /// CRCR or LFLF.
+                if (same) return;
+
+                /// CRLF or LFCR.
+                file_stack.back()->curr++;
+            }
+
+            /// Either CR or LF followed by something else.
+            lastc = '\n';
+        }
+    }
+
+    auto read_until_char(char c) -> res<std::string> {
+        std::string s;
+        while (lastc != c && lastc != 0) {
+            s += lastc;
+            next_char();
+        }
+
+        /// Check for EOF.
+        if (lastc == 0) return diag(diag_kind::error, loc{}, "Unexpected end of file while looking for '{}'", c);
+
+        /// Get the next token.
+        check(next());
+
+        /// Return lexed text.
+        return s;
+    }
+
+    void skip_line() {
+        while (lastc != '\n' && lastc != 0) next_char();
+    }
+
+    void skip_whitespace() {
+        while (std::isspace(lastc)) next_char();
+    }
+
+    auto lex_number() -> res<void> {
+        /// Helper function that actually parses a number.
+        auto lex_number_impl = [this](bool pred(char), usz conv(char), usz base) -> res<void> {
+            /// Need at least one digit.
+            if (not pred(lastc)) return diag(diag_kind::error, lastc_loc() << 1 <<= 1, "Invalid integer literal");
+
+            /// Parse the literal.
+            usz value{};
+            do {
+                usz old_value = value;
+                value *= base;
+
+                /// Check for overflow.
+                if (value < old_value) {
+                overflow:
+                    /// Consume the remaining digits so we can highlight the entire thing in the error.
+                    while (pred(lastc)) next_char();
+                    return diag(diag_kind::error, loc{tok.location.pos, lastc_loc()} >>= -1, "Integer literal overflow");
+                }
+
+                /// Add the next digit.
+                old_value = value;
+                value += conv(lastc);
+                if (value < old_value) goto overflow;
+
+                /// Yeet it.
+                next_char();
+            } while (pred(lastc));
+
+            /// The next character must not be a start character.
+            if (isstart(lastc))
+                return diag(diag_kind::error, loc{tok.location.pos, lastc_loc()}, "Invalid character in integer literal: '{}'", lastc);
+
+            /// We have a valid integer literal!
+            tok.type = tk::number;
+            tok.integer = isz(value);
+            return {};
+        };
+
+        /// If the first character is a 0, then this might be a non-decimal constant.
+        if (lastc == 0) {
+            next_char();
+
+            /// Hexadecimal literal.
+            if (lastc == 'x' or lastc == 'X') {
+                next_char();
+                static const auto xctoi = [](char c) -> usz {
+                    switch (c) {
+                        case '0' ... '9': return static_cast<usz>(c - '0');
+                        case 'a' ... 'f': return static_cast<usz>(c - 'a');
+                        case 'A' ... 'F': return static_cast<usz>(c - 'A');
+                        default: NHTML_UNREACHABLE();
+                    }
+                };
+                return lex_number_impl(is_hex, xctoi, 16);
+            }
+
+            /// Octal literal.
+            if (lastc == 'o' or lastc == 'O') {
+                next_char();
+                return lex_number_impl(
+                    is_octal,
+                    [](char c) { return static_cast<usz>(c - '0'); },
+                    8
+                );
+            }
+
+            /// Binary literal.
+            if (lastc == 'b' or lastc == 'B') {
+                next_char();
+                return lex_number_impl(
+                    is_binary,
+                    [](char c) { return static_cast<usz>(c - '0'); },
+                    2
+                );
+            }
+
+            /// Multiple leading 0’s are not permitted.
+            if (std::isdigit(lastc))
+                return diag(diag_kind::error, lastc_loc() << 1, "Leading 0 in integer literal. (Hint: Use 0o/0O for octal literals)");
+
+            /// Integer literal must be a literal 0.
+            if (isstart(lastc))
+                return diag(diag_kind::error, lastc_loc() <<= 1, "Invalid character in integer literal: '{}'", lastc);
+
+            /// Integer literal is 0.
+            tok.type = tk::number;
+            tok.integer = 0;
+            return {};
+        }
+
+        /// If the first character is not 0, then we have a decimal literal.
+        return lex_number_impl(
+            is_decimal,
+            [](char c) { return static_cast<usz>(c - '0'); },
+            10
+        );
+    }
+
+    auto lex_string(char delim) -> res<void> {
+        /// Yeet the delimiter.
+        tok.text.clear();
+        next_char();
+
+        /// Lex the string. If it’s a raw string, we don’t need to
+        /// do any escaping.
+        if (delim == '\'') {
+            while (lastc != delim && lastc != 0) {
+                tok.text += lastc;
+                next_char();
+            }
+        }
+
+        /// Otherwise, we also need to replace escape sequences.
+        else if (delim == '"') {
+            while (lastc != delim && lastc != 0) {
+                if (lastc == '\\') {
+                    next_char();
+                    switch (lastc) {
+                        case 'a': tok.text += '\a'; break;
+                        case 'b': tok.text += '\b'; break;
+                        case 'f': tok.text += '\f'; break;
+                        case 'n': tok.text += '\n'; break;
+                        case 'r': tok.text += '\r'; break;
+                        case 't': tok.text += '\t'; break;
+                        case 'v': tok.text += '\v'; break;
+                        case '\\': tok.text += '\\'; break;
+                        case '\'': tok.text += '\''; break;
+                        case '"': tok.text += '"'; break;
+                        case '0': tok.text += '\0'; break;
+                        default:
+                            return diag(diag_kind::error, {tok.location.pos, lastc_loc()}, "Invalid escape sequence");
+                    }
+                } else {
+                    tok.text += lastc;
+                }
+                next_char();
+            }
+        }
+
+        /// Other string delimiters are invalid.
+        else { return diag(diag_kind::error, lastc_loc() << 1, "Invalid delimiter: {}", delim); }
+
+        /// Make sure we actually have a delimiter.
+        if (lastc != delim) return diag(diag_kind::error, lastc_loc() << 1, "Unterminated string literal");
+        next_char();
+
+        /// This is a valid string.
+        tok.type = tk::string;
+        return {};
+    }
+
+    [[nodiscard]] bool seekable(loc l) const {
+        if (l.file >= files.size()) return false;
+        const auto& f = files[l.file];
+        return usz(l.pos) + l.len <= f.contents.size() and l.len;
+    }
+
+    /// Seek to a source location. The location must be valid.
+    [[nodiscard]] auto seek(loc l) const -> loc_info {
+        loc_info info{};
+
+        /// Get the file that the location is in.
+        const auto& f = files[l.file];
+
+        /// Seek back to the start of the line.
+        const char* const data = f.contents.data();
+        info.line_start = data + l.pos;
+        while (info.line_start > data and *info.line_start != '\n') info.line_start--;
+        if (*info.line_start == '\n') info.line_start++;
+
+        /// Seek forward to the end of the line.
+        const char* const line_end = data + f.contents.size();
+        info.line_end = data + l.pos + l.len;
+        while (info.line_end < line_end and *info.line_end != '\n') info.line_end++;
+
+        /// Determine the line and column number.
+        info.line = 1;
+        for (const char* d = data; d < data + l.pos; d++) {
+            if (*d == '\n') {
+                info.line++;
+                info.col = 0;
+            } else {
+                info.col++;
+            }
+        }
+
+        /// Done!
+        return info;
+    }
+
+    /// =======================================================================
+    ///  Parser Operations
+    /// =======================================================================
+#define advance()                                                \
+    do {                                                         \
+        auto r = next();                                         \
+        if (not r) return std::unexpected{std::move(r.error())}; \
+    } while (false)
+
+    /// Parser primitives.
+    bool at(tk t) { return tok.type == t; }
+
+    /// Add a file.
+    auto add_file(file&& f) -> res<void> {
+        if (files.size() > std::numeric_limits<u16>::max()) return mkerr("Sorry, but we can't handle more than 65536 files.");
+
+        files.push_back(std::move(f));
+        file_stack.push_back(&files.back());
+        auto newf = file_stack.back();
+
+        newf->file_index = u16(files.size() - 1);
+        newf->curr = newf->contents.data();
+        newf->end = newf->contents.data() + newf->contents.size();
+
+        return {};
+    }
+
     /// Parse the input.
     /// <document> ::= { <element> }
-    auto parse() -> res<document> {
-        /// No input.
-        if (files.empty()) return std::move(doc);
+    auto parse(file&& f) -> res<document> {
+        /// Add the file.
+        check(add_file(std::move(f)));
 
-        /// Create a lexer for the first file.
-        lexers.emplace_back(*this, 0);
-        lexer_stack.push_back(&lexers.back());
-        check(lexers.back().init());
+        /// Read the first token.
+        next_char();
+        check(next());
 
         /// Parse the document.
-        while (lexers.back().tok.type != tk::eof) {
+        while (tok.type != tk::eof) {
             /// Parse an element.
             auto e = parse_element();
             if (not e) return err{e.error()};
@@ -291,29 +633,29 @@ struct parser {
     /// Parse an element.
     /// <element>  ::= <element-named> | <element-text> | <element-implicit-div>
     auto parse_element() -> res<el> {
-        switch (curr().type) {
+        switch (tok.type) {
             /// Named element.
             case tk::name: {
-                auto name = tolower(curr().text);
+                auto name = tolower(tok.text);
                 advance();
                 return parse_named_element(std::move(name));
             }
 
             /// Implicit div.
             case tk::class_name: {
-                auto cl = curr().text;
+                auto cl = tok.text;
                 advance();
                 return parse_named_element("div"s, {std::move(cl)});
             }
 
             /// Implicit div.
             case tk::id: {
-                auto id = curr().text;
+                auto id = tok.text;
                 advance();
                 return parse_named_element("div"s, {}, std::move(id));
             }
 
-            default: return diag(diag_kind::error, curr().location, "Expected element, got {}", tk_to_str(curr().type));
+            default: return diag(diag_kind::error, tok.location, "Expected element, got {}", tk_to_str(tok.type));
         }
     }
 
@@ -330,10 +672,10 @@ struct parser {
         /// Parse the classes.
         while (at(tk::class_name) or at(tk::id)) {
             if (at(tk::id)) {
-                if (not id.empty()) return diag(diag_kind::error, curr().location, "Element already has an ID");
-                id = trim(curr().text);
+                if (not id.empty()) return diag(diag_kind::error, tok.location, "Element already has an ID");
+                id = trim(tok.text);
             } else {
-                classes.insert(trim(tolower(curr().text)));
+                classes.insert(trim(tolower(tok.text)));
             }
             advance();
         }
@@ -359,7 +701,7 @@ struct parser {
             }
 
             /// Yeet "}".
-            if (not at(tk::rbrace)) return diag(diag_kind::error, curr().location, "Expected '}}', got {}", tk_to_str(curr().type));
+            if (not at(tk::rbrace)) return diag(diag_kind::error, tok.location, "Expected '}}', got {}", tk_to_str(tok.type));
             advance();
 
             /// Return the element.
@@ -382,13 +724,13 @@ struct parser {
     /// <text-body>  ::= "(" TOKENS ")"
     auto parse_text_elem() -> res<el> {
         /// Must be at '('.
-        if (not at(tk::lparen)) return diag(diag_kind::error, curr().location, "Expected '(', got {}", tk_to_str(curr().type));
+        if (not at(tk::lparen)) return diag(diag_kind::error, tok.location, "Expected '(', got {}", tk_to_str(tok.type));
 
         /// Get the text.
-        auto text = lex().read_until_char(')');
+        auto text = read_until_char(')');
 
         /// Must be at ')'.
-        if (not at(tk::rparen)) return diag(diag_kind::error, curr().location, "Expected ')', got {}", tk_to_str(curr().type));
+        if (not at(tk::rparen)) return diag(diag_kind::error, tok.location, "Expected ')', got {}", tk_to_str(tok.type));
         advance();
 
         /// Create the text element.
@@ -397,409 +739,12 @@ struct parser {
         e->content = std::move(*text);
         return e;
     }
-
-    [[nodiscard]] bool seekable(loc l) const {
-        if (l.file >= files.size()) return false;
-        const auto& f = files[l.file];
-        return usz(l.pos) + l.len <= f.contents.size() and l.len;
-    }
-
-    /// Seek to a source location. The location must be valid.
-    [[nodiscard]] auto seek(loc l) const -> loc_info {
-        loc_info info{};
-
-        /// Get the file that the location is in.
-        const auto& f = files[l.file];
-
-        /// Seek back to the start of the line.
-        const char* const data = f.contents.data();
-        info.line_start = data + l.pos;
-        while (info.line_start > data and *info.line_start != '\n') info.line_start--;
-        if (*info.line_start == '\n') info.line_start++;
-
-        /// Seek forward to the end of the line.
-        const char* const end = data + f.contents.size();
-        info.line_end = data + l.pos + l.len;
-        while (info.line_end < end and *info.line_end != '\n') info.line_end++;
-
-        /// Determine the line and column number.
-        info.line = 1;
-        for (const char* d = data; d < data + l.pos; d++) {
-            if (*d == '\n') {
-                info.line++;
-                info.col = 0;
-            } else {
-                info.col++;
-            }
-        }
-
-        /// Done!
-        return info;
-    }
 };
-
-/// Check if a character is allowed at the start of an identifier.
-constexpr bool isstart(char c) {
-    return isalpha(c) or c == '_' or c == '$';
-}
-
-/// Check if a character is allowed in an identifier.
-constexpr bool iscontinue(char c) {
-    return isstart(c) or isdigit(c) or c == '-' or c == '!' or c == '?';
-}
-
-constexpr bool is_binary(char c) { return c == '0' or c == '1'; }
-constexpr bool is_decimal(char c) { return c >= '0' and c <= '9'; }
-constexpr bool is_octal(char c) { return c >= '0' and c <= '7'; }
-constexpr bool is_hex(char c) { return (c >= '0' and c <= '9') or (c >= 'a' and c <= 'f') or (c >= 'A' and c <= 'F'); }
-
-/// ========================================================================
-///  Lexer — Implementation.
-/// ========================================================================
-auto lexer::init() -> res<void> {
-    tok.location.file = static_cast<u16>(file_index);
-    curr = p.files[file_index].contents.data();
-    end = curr + p.files[file_index].contents.size();
-    next_char();
-    check(next());
-    return {};
-}
-
-auto lexer::lastc_loc() const -> loc {
-    loc l;
-    l.pos = static_cast<u32>(curr - p.files[file_index].contents.data() - 1);
-    l.len = 1;
-    l.file = static_cast<u16>(file_index);
-    return l;
-}
-
-template <typename... arguments>
-auto lexer::diag(diag_kind kind, loc l, fmt::format_string<arguments...> fmt, arguments&&... args) -> std::unexpected<std::string> {
-    return p.diag(kind, l, fmt, std::forward<arguments>(args)...);
-}
-
-auto lexer::look_ahead(usz number_of_tokens) -> res<token*> {
-    /// If we don't have enough tokens, lex them.
-    if (lookahead_tokens.size() <= number_of_tokens) {
-        auto current_token = std::move(tok);
-        while (lookahead_tokens.size() < number_of_tokens) {
-            check(next());
-            lookahead_tokens.push_back(std::move(tok));
-            tok = {};
-        }
-        tok = std::move(current_token);
-    }
-
-    /// Return the token.
-    return &lookahead_tokens[number_of_tokens - 1];
-}
-
-auto lexer::next() -> res<void> {
-    /// Pop lookahead tokens.
-    if (not lookahead_tokens.empty()) {
-        tok = std::move(lookahead_tokens.back());
-        lookahead_tokens.pop_back();
-        return {};
-    }
-
-    /// Skip whitespace.
-    skip_whitespace();
-
-    /// Keep returning EOF if we're at EOF.
-    if (lastc == 0) {
-        tok.type = tk::eof;
-        return {};
-    }
-
-    /// Reset the token. We set the token type to 'invalid' here so that,
-    /// if we encounter an error, we can just issue a diagnostic and return
-    /// without setting the token type. The parser will then stop because
-    /// it encounters an invalid token.
-    tok.type = tk::invalid;
-    tok.location.pos = static_cast<u32>(curr - p.files[file_index].contents.data() - 1);
-
-    /// Reads a name.
-    auto read_name = [this] {
-        /// Characters that delimit a name.
-        static constexpr auto name_delims = "(){}.# \t\r\n\f\v"sv;
-
-        tok.type = tk::name;
-        tok.text.clear();
-        while (not name_delims.contains(lastc)) {
-            tok.text += lastc;
-            next_char();
-        }
-    };
-
-    /// Lex the token.
-    switch (lastc) {
-        case '(':
-            next_char();
-            tok.type = tk::lparen;
-            break;
-
-        case ')':
-            next_char();
-            tok.type = tk::rparen;
-            break;
-
-        case '{':
-            next_char();
-            tok.type = tk::lbrace;
-            break;
-
-        case '}':
-            next_char();
-            tok.type = tk::rbrace;
-            break;
-
-        /// Maybe comment.
-        case '/':
-            /// Lookahead to see if this is a comment.
-            if (curr < end and *curr == '/') {
-                skip_line();
-                return next();
-            }
-
-            /// Not a comment. Handle in default case.
-            goto default_case;
-
-        /// Class.
-        case '.':
-            next_char();
-            read_name();
-            tok.type = tk::class_name;
-            break;
-
-        /// ID.
-        case '#':
-            next_char();
-            read_name();
-            tok.type = tk::id;
-            break;
-
-        default:
-        default_case:
-            read_name();
-            break;
-    }
-
-    /// Set the end of the token.
-    tok.location.len = static_cast<u16>(curr - p.files[file_index].contents.data() - tok.location.pos - 1);
-    if (curr == end and not lastc) tok.location.len++;
-    return {};
-}
-
-void lexer::next_char() {
-    if (curr == end) {
-        lastc = 0;
-        return;
-    }
-
-    lastc = *curr++;
-
-    /// Collapse CRLF and LFCR to a single newline,
-    /// but keep CRCR and LFLF as two newlines.
-    if (lastc == '\r' || lastc == '\n') {
-        /// Two newlines in a row.
-        if (curr != end && (*curr == '\r' || *curr == '\n')) {
-            bool same = lastc == *curr;
-            lastc = '\n';
-
-            /// CRCR or LFLF.
-            if (same) return;
-
-            /// CRLF or LFCR.
-            curr++;
-        }
-
-        /// Either CR or LF followed by something else.
-        lastc = '\n';
-    }
-}
-
-auto lexer::read_until_char(char c) -> res<std::string> {
-    std::string s;
-    while (lastc != c && lastc != 0) {
-        s += lastc;
-        next_char();
-    }
-
-    /// Check for EOF.
-    if (lastc == 0) return diag(diag_kind::error, loc{}, "Unexpected end of file while looking for '{}'", c);
-
-    /// Get the next token.
-    check(next());
-
-    /// Return lexed text.
-    return s;
-}
-
-void lexer::skip_line() {
-    while (lastc != '\n' && lastc != 0) next_char();
-}
-
-void lexer::skip_whitespace() {
-    while (std::isspace(lastc)) next_char();
-}
-
-auto lexer::lex_number() -> res<void> {
-    /// Helper function that actually parses a number.
-    auto lex_number_impl = [this](bool pred(char), usz conv(char), usz base) -> res<void> {
-        /// Need at least one digit.
-        if (not pred(lastc)) return diag(diag_kind::error, lastc_loc() << 1 <<= 1, "Invalid integer literal");
-
-        /// Parse the literal.
-        usz value{};
-        do {
-            usz old_value = value;
-            value *= base;
-
-            /// Check for overflow.
-            if (value < old_value) {
-            overflow:
-                /// Consume the remaining digits so we can highlight the entire thing in the error.
-                while (pred(lastc)) next_char();
-                return diag(diag_kind::error, loc{tok.location.pos, lastc_loc()} >>= -1, "Integer literal overflow");
-            }
-
-            /// Add the next digit.
-            old_value = value;
-            value += conv(lastc);
-            if (value < old_value) goto overflow;
-
-            /// Yeet it.
-            next_char();
-        } while (pred(lastc));
-
-        /// The next character must not be a start character.
-        if (isstart(lastc))
-            return diag(diag_kind::error, loc{tok.location.pos, lastc_loc()}, "Invalid character in integer literal: '{}'", lastc);
-
-        /// We have a valid integer literal!
-        tok.type = tk::number;
-        tok.integer = isz(value);
-        return {};
-    };
-
-    /// If the first character is a 0, then this might be a non-decimal constant.
-    if (lastc == 0) {
-        next_char();
-
-        /// Hexadecimal literal.
-        if (lastc == 'x' or lastc == 'X') {
-            next_char();
-            static const auto xctoi = [](char c) -> usz {
-                switch (c) {
-                    case '0' ... '9': return static_cast<usz>(c - '0');
-                    case 'a' ... 'f': return static_cast<usz>(c - 'a');
-                    case 'A' ... 'F': return static_cast<usz>(c - 'A');
-                    default: NHTML_UNREACHABLE();
-                }
-            };
-            return lex_number_impl(is_hex, xctoi, 16);
-        }
-
-        /// Octal literal.
-        if (lastc == 'o' or lastc == 'O') {
-            next_char();
-            return lex_number_impl(
-                is_octal,
-                [](char c) { return static_cast<usz>(c - '0'); },
-                8
-            );
-        }
-
-        /// Binary literal.
-        if (lastc == 'b' or lastc == 'B') {
-            next_char();
-            return lex_number_impl(
-                is_binary,
-                [](char c) { return static_cast<usz>(c - '0'); },
-                2
-            );
-        }
-
-        /// Multiple leading 0’s are not permitted.
-        if (std::isdigit(lastc))
-            return diag(diag_kind::error, lastc_loc() << 1, "Leading 0 in integer literal. (Hint: Use 0o/0O for octal literals)");
-
-        /// Integer literal must be a literal 0.
-        if (isstart(lastc))
-            return diag(diag_kind::error, lastc_loc() <<= 1, "Invalid character in integer literal: '{}'", lastc);
-
-        /// Integer literal is 0.
-        tok.type = tk::number;
-        tok.integer = 0;
-        return {};
-    }
-
-    /// If the first character is not 0, then we have a decimal literal.
-    return lex_number_impl(
-        is_decimal,
-        [](char c) { return static_cast<usz>(c - '0'); },
-        10
-    );
-}
-
-auto lexer::lex_string(char delim) -> res<void> {
-    /// Yeet the delimiter.
-    tok.text.clear();
-    next_char();
-
-    /// Lex the string. If it’s a raw string, we don’t need to
-    /// do any escaping.
-    if (delim == '\'') {
-        while (lastc != delim && lastc != 0) {
-            tok.text += lastc;
-            next_char();
-        }
-    }
-
-    /// Otherwise, we also need to replace escape sequences.
-    else if (delim == '"') {
-        while (lastc != delim && lastc != 0) {
-            if (lastc == '\\') {
-                next_char();
-                switch (lastc) {
-                    case 'a': tok.text += '\a'; break;
-                    case 'b': tok.text += '\b'; break;
-                    case 'f': tok.text += '\f'; break;
-                    case 'n': tok.text += '\n'; break;
-                    case 'r': tok.text += '\r'; break;
-                    case 't': tok.text += '\t'; break;
-                    case 'v': tok.text += '\v'; break;
-                    case '\\': tok.text += '\\'; break;
-                    case '\'': tok.text += '\''; break;
-                    case '"': tok.text += '"'; break;
-                    case '0': tok.text += '\0'; break;
-                    default:
-                        return diag(diag_kind::error, {tok.location.pos, lastc_loc()}, "Invalid escape sequence");
-                }
-            } else {
-                tok.text += lastc;
-            }
-            next_char();
-        }
-    }
-
-    /// Other string delimiters are invalid.
-    else { return diag(diag_kind::error, lastc_loc() << 1, "Invalid delimiter: {}", delim); }
-
-    /// Make sure we actually have a delimiter.
-    if (lastc != delim) return diag(diag_kind::error, lastc_loc() << 1, "Unterminated string literal");
-    next_char();
-
-    /// This is a valid string.
-    tok.type = tk::string;
-    return {};
-}
 
 /// Parse a file.
 auto parse(file&& f) -> std::expected<document, std::string> {
     parser p;
-    p.files.push_back(std::move(f));
-    return p.parse();
+    return p.parse(std::move(f));
 }
 
 } // namespace
