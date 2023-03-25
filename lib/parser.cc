@@ -836,9 +836,13 @@ struct parser {
             if (not at(tk::name)) return diag(diag_kind::error, tok.location, "Expected attribute name, got {}", tk_to_str(tok.type));
             auto name = tok.text;
             auto l = tok.location;
-            advance();
+
+            /// Attribute name may not be 'id' or 'class'.
+            if (name == "id" or name == "class")
+                return diag(diag_kind::error, l, "Cannot specify '{}' attribute manually. Use the '.' or '#' syntax instead.", name);
 
             /// An attribute may, but need not, have a value
+            advance();
             std::string value;
             if (at(tk::eq)) {
                 /// Read the value. An attribute value is everything up to the next comma or closing bracket.
