@@ -768,9 +768,6 @@ struct parser {
 
         /// Element contains other elements.
         if (at(tk::lbrace)) {
-            /// Check that this isn’t a link.
-            if (name.starts_with('/')) return diag(diag_kind::error, l, "Links may not contain other elements");
-
             /// Yeet "{".
             advance();
 
