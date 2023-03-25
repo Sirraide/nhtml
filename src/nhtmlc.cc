@@ -11,8 +11,9 @@ using options = clopts< // clang-format off
     option<"--f-columns", "Maximum column number for text (soft cap, default: 140)", i64>,
     option<"--f-indent-width", "Indent width (default: 4); ignored if --f-use-tabs is also specified", i64>,
     option<"--f-quoting-style", "Quoting style for attributes ('single' or 'double'; default: single)">, /// TODO: Libclopts: Add enum support.
-    flag<"--f-no-indent", "Disable indenting (default: false)">,
-    flag<"--f-use-tabs", "Indent using tabs (default: false)">,
+    flag<"--f-no-indent", "Disable indenting">,
+    flag<"--f-use-tabs", "Indent using tabs instead of spaces">,
+    flag<"--f-self-close-xml-tags", "Use self-closing XML tags in e.g. SVGs">,
     help
 >; // clang-format on
 
@@ -46,8 +47,9 @@ auto get_options() -> nhtml::document::write_opts {
         .indent_width = u64(o<"--f-indent-width">() ? *o<"--f-indent-width">() : i64(wo::default_indent_width)),
         .text_columns = u64(o<"--f-columns">() ? *o<"--f-columns">() : i64(wo::default_text_columns)),
         .attribute_quoting_style = get_quoting_style(),
-        .no_indent = o<"--f-no-indent">() ? *o<"--f-no-indent">() : wo::default_no_indent,
-        .use_tabs = o<"--f-use-tabs">() ? *o<"--f-use-tabs">() : wo::default_use_tabs,
+        .no_indent = o<"--f-no-indent">() or wo::default_no_indent,
+        .self_close_xml_tags = o<"--f-self-close-xml-tags">() or wo::default_self_close_xml_tags,
+        .use_tabs = o<"--f-use-tabs">() or wo::default_use_tabs,
     };
 }
 

@@ -1,4 +1,6 @@
 #include <nhtml/core.hh>
+#include <nhtml/internal/utils.hh>
+
 namespace nhtml::detail {
 /// ===========================================================================
 ///  Document
@@ -9,6 +11,7 @@ struct html_writer {
     const output_type out;
     usz lines = 0;
     document::write_opts opts;
+    bool in_xml = false;
 
     explicit html_writer(output_type _out, document::write_opts _opts)
         : out(_out)
@@ -173,6 +176,9 @@ struct html_writer {
             return;
         }
 
+        /// Check for XML elements.
+        tempset in_xml = in_xml or el.tag_name == "svg";
+
         /// TODO: Special handling for <p>, <pre>, <code>, <script>, <style>.
         indent(i);
         write("<{}", el.tag_name);
@@ -207,6 +213,13 @@ struct html_writer {
             write(" {}={}{}{}", name, quote, escape_quotes(value, opts.attribute_quoting_style), quote);
         }
 
+        /// Empty tag in XML: Use self-closing syntax if requested.
+        if (std::holds_alternative<std::monostate>(el.content) and in_xml and opts.self_close_xml_tags) {
+            write("/>");
+            nl();
+            return;
+        }
+
         /// Close opening tag. Note the line in case we need to insert a line break later.
         write(">");
         auto line = lines;
@@ -214,6 +227,7 @@ struct html_writer {
         /// Write content.
         // clang-format off
         std::visit(overloaded {
+            [](std::monostate) {},
             [&](const std::string& str) {
                 write_text(str, i + 1, el.tag_name.size() + 2);
             },

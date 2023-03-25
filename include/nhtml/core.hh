@@ -35,7 +35,7 @@ struct element {
     std::string id;
 
     /// The element’s content.
-    std::variant<vector, std::string> content;
+    std::variant<std::monostate, std::string, vector> content = std::monostate{};
 
 private:
     explicit element() {}
@@ -48,7 +48,9 @@ private:
     }
     explicit element(std::string _tag_name, std::vector<element::ptr>&& els)
         : tag_name(std::move(_tag_name))
-        , content(std::move(els)) {}
+        , content(std::move(els)) {
+        if (std::get<vector>(content).empty()) content = std::monostate{};
+    }
 
 public:
     /// Create a new element.
@@ -67,6 +69,7 @@ struct document {
         static constexpr u64 default_text_columns = 140;
         static constexpr bool default_no_indent = false;
         static constexpr bool default_use_tabs = false;
+        static constexpr bool default_self_close_xml_tags = false;
         static constexpr quoting_style default_quoting_style = quoting_style::single_quotes;
 
         /// Number of spaces per indentation level. Ignored for tabs.
@@ -80,6 +83,9 @@ struct document {
 
         /// Whether to disable indenting.
         bool no_indent = default_no_indent;
+
+        /// Whether to self-close XML-style tags.
+        bool self_close_xml_tags = default_self_close_xml_tags;
 
         /// Whether to use tabs instead of spaces.
         bool use_tabs = default_use_tabs;
