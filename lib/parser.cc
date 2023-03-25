@@ -1,7 +1,7 @@
 #include <deque>
 #include <fmt/color.h>
+#include <nhtml/internal/file.hh>
 #include <nhtml/parser.hh>
-#include <unordered_set>
 #include <utility>
 
 namespace nhtml::detail {

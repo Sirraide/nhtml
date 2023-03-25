@@ -14,6 +14,7 @@
 #include <fmt/format.h>
 #include <fstream>
 #include <mutex>
+#include <nhtml/internal/file.hh>
 #include <nhtml/nhtml.hh>
 #include <ranges>
 #include <sys/wait.h>
