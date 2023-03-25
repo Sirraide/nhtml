@@ -8,9 +8,9 @@ using options = clopts< // clang-format off
     positional<"path", "The file or directory to compile">,
     flag<"-c", "Compile a single file and exit">,
     option<"-o", "The output file or directory">,
-    option<"--f-columns", "Maximum column number (soft cap, default: 140)", i64>,
-    option<"--f-indent-width", "Indent width (default: 4); ignore if --f-use-tabs is also specified", i64>,
-    option<"--f-quoting-style", "Quoting style for attributes (single or double)">, /// TODO: Libclopts: Add enum support.
+    option<"--f-columns", "Maximum column number for text (soft cap, default: 140)", i64>,
+    option<"--f-indent-width", "Indent width (default: 4); ignored if --f-use-tabs is also specified", i64>,
+    option<"--f-quoting-style", "Quoting style for attributes ('single' or 'double'; default: single)">, /// TODO: Libclopts: Add enum support.
     flag<"--f-no-indent", "Disable indenting (default: false)">,
     flag<"--f-use-tabs", "Indent using tabs (default: false)">,
     help
