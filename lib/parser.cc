@@ -761,6 +761,9 @@ struct parser {
                 if (not e->attributes.try_emplace("href", e->tag_name))
                     return diag(diag_kind::error, l, "Cannot specify href attribute for link");
                 e->tag_name = "a";
+
+                /// If the element is empty, we set the text to the value of the link.
+                if (std::holds_alternative<std::monostate>(e->content)) e->content = e->attributes["href"];
             }
 
             return e;
