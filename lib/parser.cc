@@ -854,7 +854,7 @@ struct parser {
             }
 
             /// Add the attribute.
-            if (not attrs.try_emplace(std::move(name), std::move(value)))
+            if (not attrs.try_emplace(name, std::move(value)))
                 return diag(diag_kind::error, l, "Duplicate '{}' attribute", name);
 
             /// Must be at a comma or ']' (end of list).
