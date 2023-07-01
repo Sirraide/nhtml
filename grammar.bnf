@@ -1,9 +1,11 @@
 <document> ::= { <element> }
 <element>  ::= <element-named> | <element-text> | <element-implicit-div>
 <element-named> ::= NAME <element-named-rest>
-<element-implicit-div> ::= ( <attr-list> | CLASS | ID) <element-named-rest>
-<element-named-rest> ::= { <attr-list> | CLASS | ID } [ <content> ]
+<element-implicit-div> ::= ( <element-data> ) <element-named-rest>
+<element-named-rest> ::= { <element-data> } [ <content> ]
+<element-data> ::= <attr-list> | <inline-style> | CLASS | ID
 <attr-list> ::= "[" { <attr> [ "," ] } "]"
+<inline-style> ::= "%" "[" TEXT "]"
 <attr> ::= NAME "=" VALUE
 <element-text>  ::= [ TEXT ] <text-body>
 <text-body> ::= "(" TOKENS ")"

@@ -80,8 +80,8 @@ struct loc {
 struct loc_info {
     usz line;
     usz col;
-    const char* line_start;
-    const char* line_end;
+    const char *line_start;
+    const char *line_end;
 };
 
 /// ===========================================================================
@@ -102,6 +102,7 @@ enum struct tk {
     rbrack,
     lparen,
     rparen,
+    percent,
 
     eq,
     comma,
@@ -138,6 +139,7 @@ auto tk_to_str(tk t) -> std::string_view {
         case tk::rbrack: return "]";
         case tk::lparen: return "(";
         case tk::rparen: return ")";
+        case tk::percent: return "%";
         case tk::eq: return "=";
         case tk::comma: return ",";
     }
@@ -207,7 +209,7 @@ struct parser {
     std::deque<file> files;
 
     /// File stack.
-    std::vector<file*> file_stack;
+    std::vector<file *> file_stack;
 
     /// Parsed document.
     document doc;
@@ -224,7 +226,7 @@ struct parser {
     /// =======================================================================
     /// Issue a diagnostic.
     template <typename... arguments>
-    auto diag(diag_kind kind, loc where, fmt::format_string<arguments...> fmt, arguments&&... args) -> std::unexpected<std::string> {
+    auto diag(diag_kind kind, loc where, fmt::format_string<arguments...> fmt, arguments&&...args) -> std::unexpected<std::string> {
         using fmt::fg;
         using enum fmt::emphasis;
         using enum fmt::terminal_color;
@@ -288,16 +290,18 @@ struct parser {
         /// Underline the range. For that, we first pad the line based on the number
         /// of digits in the line number and append more spaces to line us up with
         /// the range.
-        NHTML_REPEAT (digits + before.size() + sizeof("  | ") - 1) out += fmt::format(" ");
+        NHTML_REPEAT(digits + before.size() + sizeof("  | ") - 1)
+        out += fmt::format(" ");
 
         /// Finally, underline the range.
-        NHTML_REPEAT (range.size()) out += fmt::format(diag_colour(kind), "~");
+        NHTML_REPEAT(range.size())
+        out += fmt::format(diag_colour(kind), "~");
         out += fmt::format("\n");
         return err(out);
     }
 
-    auto curr() const -> const char* { return file_stack.back()->curr; }
-    auto end() const -> const char* { return file_stack.back()->end; }
+    auto curr() const -> const char * { return file_stack.back()->curr; }
+    auto end() const -> const char * { return file_stack.back()->end; }
 
     auto lastc_loc() const -> loc {
         loc l;
@@ -307,7 +311,7 @@ struct parser {
         return l;
     }
 
-    auto look_ahead(usz number_of_tokens) -> res<token*> {
+    auto look_ahead(usz number_of_tokens) -> res<token *> {
         /// If we don't have enough tokens, lex them.
         if (lookahead_tokens.size() <= number_of_tokens) {
             auto current_token = std::move(tok);
@@ -350,7 +354,7 @@ struct parser {
         /// Reads a name.
         auto read_name = [this] {
             /// Characters that delimit a name.
-            static constexpr auto name_delims = "()[]{}.,#= \t\r\n\f\v"sv;
+            static constexpr auto name_delims = "()[]{}.,%#= \t\r\n\f\v"sv;
 
             tok.type = tk::name;
             tok.text.clear();
@@ -358,6 +362,11 @@ struct parser {
                 tok.text += lastc;
                 next_char();
             }
+
+            /// Check for invalid names. This generally means we’ve added a
+            /// character to the delimiters without handling it in the lexer
+            /// below.
+            if (tok.text.empty()) tok.type = tk::invalid;
         };
 
         /// Lex the token.
@@ -415,6 +424,12 @@ struct parser {
                 next_char();
                 read_name();
                 tok.type = tk::id;
+                break;
+
+            /// Inline style.
+            case '%':
+                next_char();
+                tok.type = tk::percent;
                 break;
 
             /// Equals sign.
@@ -670,19 +685,19 @@ struct parser {
         const auto& f = files[l.file];
 
         /// Seek back to the start of the line.
-        const char* const data = f.contents.data();
+        const char *const data = f.contents.data();
         info.line_start = data + l.pos;
         while (info.line_start > data and *info.line_start != '\n') info.line_start--;
         if (*info.line_start == '\n') info.line_start++;
 
         /// Seek forward to the end of the line.
-        const char* const line_end = data + f.contents.size();
+        const char *const line_end = data + f.contents.size();
         info.line_end = data + l.pos + l.len;
         while (info.line_end < line_end and *info.line_end != '\n') info.line_end++;
 
         /// Determine the line and column number.
         info.line = 1;
-        for (const char* d = data; d < data + l.pos; d++) {
+        for (const char *d = data; d < data + l.pos; d++) {
             if (*d == '\n') {
                 info.line++;
                 info.col = 0;
@@ -705,11 +720,12 @@ struct parser {
     } while (false)
 
     /// Parser primitives.
-    bool at(std::same_as<tk> auto&&... t) { return ((tok.type == t) or ...); }
+    bool at(std::same_as<tk> auto&&...t) { return ((tok.type == t) or ...); }
 
     /// Add a file.
     auto add_file(file&& f) -> res<void> {
-        if (files.size() > std::numeric_limits<u16>::max()) return mkerr("Sorry, but we can't handle more than 65536 files.");
+        if (files.size() > std::numeric_limits<u16>::max())
+            return mkerr("Sorry, but we can't handle more than {} files.", std::numeric_limits<u16>::max());
 
         files.push_back(std::move(f));
         file_stack.push_back(&files.back());
@@ -760,21 +776,28 @@ struct parser {
             case tk::class_name: {
                 auto cl = tok.text;
                 advance();
-                return parse_named_element("div"s, l, {std::move(cl)});
+                return parse_named_element("div", l, {std::move(cl)});
             }
 
             /// ID.
             case tk::id: {
                 auto id = tok.text;
                 advance();
-                return parse_named_element("div"s, l, {}, std::move(id));
+                return parse_named_element("div", l, {}, std::move(id));
             }
 
             /// Attribute list.
             case tk::lbrack: {
                 element::attribute_list attrs;
                 check(parse_attribute_list(attrs));
-                return parse_named_element("div"s, l, {}, "", std::move(attrs));
+                return parse_named_element("div", l, {}, "", std::move(attrs));
+            }
+
+            /// Inline style.
+            case tk::percent: {
+                element::inline_style style;
+                check(parse_inline_style(style));
+                return parse_named_element("div", l, {}, "", {}, std::move(style));
             }
 
             default: return diag(diag_kind::error, tok.location, "Expected element, got {}", tk_to_str(tok.type));
@@ -784,8 +807,9 @@ struct parser {
     /// Parse a named element.
     ///
     /// <element-named> ::= NAME <element-named-rest>
-    /// <element-implicit-div> ::= ( <attr-list> | CLASS | ID) <element-named-rest>
-    /// <element-named-rest> ::= { <attr-list> | CLASS | ID } [ <content> ]
+    /// <element-implicit-div> ::= ( <element-data> ) <element-named-rest>
+    /// <element-named-rest> ::= { <element-data> } [ <content> ]
+    /// <element-data> ::= <attr-list> | <inline-style> | CLASS | ID
     /// <element-text>  ::= [ TEXT ] <text-body>
     /// <content>  ::= "{" { <element> } "}" | <text-body>
     auto parse_named_element(
@@ -793,13 +817,14 @@ struct parser {
         loc l,
         element::class_list classes = {},
         std::string id = "",
-        element::attribute_list attributes = {}
+        element::attribute_list attributes = {},
+        element::inline_style style = {}
     ) -> res<el> {
         /// Text element.
         if (name == "text") return parse_text_elem();
 
         /// Parse the classes.
-        while (at(tk::class_name, tk::id, tk::lbrack)) {
+        while (at(tk::class_name, tk::id, tk::lbrack, tk::percent)) {
             switch (tok.type) {
                 case tk::class_name:
                     classes.insert(trim(tolower(tok.text)));
@@ -816,16 +841,25 @@ struct parser {
                     check(parse_attribute_list(attributes));
                     break;
 
+                case tk::percent:
+                    check(parse_inline_style(style));
+                    break;
+
                 default: std::unreachable();
             }
         }
 
         /// Create an element, attach classes, etc.
-        auto make = [&](auto&&... args) -> res<el> {
+        auto make = [&](auto&&...args) -> res<el> {
             auto e = element::make(NHTML_FWD(args)...);
             e->classes = std::move(classes);
             e->id = std::move(id);
             e->attributes = std::move(attributes);
+            if (not style.empty()) {
+                auto& st = e->attributes["style"];
+                if (not st.empty()) st += "; ";
+                st += style;
+            }
 
             /// If this is a link, then the name is actually ‘a’, and we
             /// add an implicit href attribute.
@@ -939,6 +973,83 @@ struct parser {
         advance();
 
         /// Done.
+        return {};
+    }
+
+    /// Parse inline CSS.
+    /// <inline-style> ::= "%" "[" TEXT "]"
+    auto parse_inline_style(std::string& style) -> res<void> {
+        advance();
+        auto loc = tok.location;
+        if (not at(tk::lbrack)) return diag(diag_kind::error, loc, "Expected '[' after '%'");
+
+        /// Very crude CSS string, brackets, and comment ‘parser’.
+        u64 open_brackets = 1;
+        bool in_comment = false;
+        enum struct string_kind {
+            none,
+            single_quoted,
+            double_quoted,
+        } str = string_kind::none;
+        while (lastc) {
+            /// Comments are skipped.
+            if (in_comment) {
+                if (lastc == '*' and (next_char(), lastc) == '/') in_comment = false;
+                next_char();
+                continue;
+            }
+
+            /// Brackets and comments are ignored in strings.
+            if (str != string_kind::none) {
+                if (
+                    (str == string_kind::single_quoted and lastc == '\'') or
+                    (str == string_kind::double_quoted and lastc == '\"')
+                ) str = string_kind::none;
+
+                style += lastc;
+                next_char();
+                continue;
+            }
+
+            switch (lastc) {
+                case '[':
+                    open_brackets++;
+                    goto append;
+
+                case ']':
+                    open_brackets--;
+                    if (not open_brackets) goto done_parsing_css;
+                    goto append;
+
+                case '/':
+                    next_char();
+                    if (lastc == '*') {
+                        in_comment = true;
+                        next_char();
+                        continue;
+                    }
+                    style += '/';
+                    goto append;
+
+                case '\'':
+                    str = string_kind::single_quoted;
+                    goto append;
+
+                case '\"':
+                    str = string_kind::double_quoted;
+                    goto append;
+
+                default:
+                append:
+                    style.push_back(lastc);
+                    next_char();
+            }
+        }
+
+    done_parsing_css:
+        if (lastc != ']') return diag(diag_kind::error, loc, "Unterminated inline style list starting here");
+        next_char();
+        advance();
         return {};
     }
 };

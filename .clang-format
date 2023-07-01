@@ -16,13 +16,7 @@ AccessModifierOffset: -4
 ##
 AlignAfterOpenBracket: BlockIndent
 
-## DONT Align arrays or initialiser lists of structures like so:
-##
-##     struct test demo[] = {
-##         {56,    23, "hello"},
-##         {-1, 93463, "world"},
-##         { 7,     5,    "!!"}
-##     };
+## Don’t align arrays or initialiser lists.
 AlignArrayOfStructures: None
 
 ## Don’t align assignments because that leads to too much extra whitespace.
@@ -34,8 +28,8 @@ AlignConsecutiveBitFields: Consecutive
 ## Same as declarations: nope.
 AlignConsecutiveDeclarations: None
 
-## Aligning macros is also annoying.
-AlignConsecutiveMacros: None
+## Aligning macros is usually fine tho.
+AlignConsecutiveMacros: Consecutive
 
 ## Escaped newlines in macros should be aligned like so:
 ##
@@ -138,8 +132,8 @@ BitFieldColonSpacing: Both
 ## Note: Only supported by clang-format 16 and later.
 #BreakAfterAttributes: Leave
 
-## Break *before*, and not after operators (excepting `=` and friends).
-BreakBeforeBinaryOperators: NonAssignment
+## Break *after*, and not before operators.
+BreakBeforeBinaryOperators: None
 
 ## NEVER put opening braces on a new line.
 BreakBeforeBraces: Attach
@@ -211,7 +205,7 @@ EmptyLineBeforeAccessModifier: Leave
 FixNamespaceComments: true
 
 ## Macros that should be formatted like the `for` keyword.
-ForEachMacros: ["NHTML_REPEAT"]
+ForEachMacros: ["foreach", "foreach_ptr", "foreach_index", "foreach_value", "list_foreach", "FOREACH_INSTRUCTION_IN_FUNCTION"]
 
 ## Same thing, but for `if`.
 IfMacros: []
@@ -306,7 +300,7 @@ PackConstructorInitializers: CurrentLine
 PenaltyReturnTypeOnItsOwnLine: 4294967295
 
 ## Left for C++, Right for C.
-PointerAlignment: Left
+PointerAlignment: Right
 
 ## Leave qualifiers where they are as the docs state that this option
 ## may lead to incorrect code.

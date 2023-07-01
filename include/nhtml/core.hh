@@ -21,6 +21,7 @@ struct element {
     using vector = std::vector<element::ptr>;
     using class_list = std::set<std::string>;
     using attribute_list = detail::icase_map<std::string>;
+    using inline_style = std::string;
 
     /// The element’s name.
     std::string tag_name;
