@@ -73,7 +73,7 @@ struct html_writer {
         auto it = text.begin();
         auto eject = [&] {
             /// The line (segment) to write.
-            auto chars = usz(it - text.begin());
+            auto chars = std::min<usz>(usz(it - text.begin()), text.size());
             auto line = std::string_view{&*text.begin(), chars};
 
             /// If the segment would make the line too long, break it on the
@@ -161,7 +161,10 @@ struct html_writer {
         }
 
         /// Write the last segment.
-        while (ws_count--) text.remove_suffix(1);
+        while (ws_count) {
+            text.remove_suffix(1);
+            ws_count--;
+        }
         eject();
 
         /// Last line break.
