@@ -761,7 +761,8 @@ struct parser {
     }
 
     /// Parse an element.
-    /// <element>  ::= <element-named> | <element-text> | <element-implicit-div>
+    /// <element> ::= <element-named> | <element-text> | <element-implicit-div> | <style-tag>
+    /// <style-tag> ::= "style" <css-data>
     auto parse_element() -> res<el> {
         auto l = tok.location;
         switch (tok.type) {
@@ -769,6 +770,19 @@ struct parser {
             case tk::name: {
                 auto name = tolower(tok.text);
                 advance();
+
+                /// Style tags need special handling.
+                if (name == "style") {
+                    std::string style;
+                    check(parse_css_data<tk::lbrace, '{', '}'>(style));
+
+                    /// Style tags never contain other tags or anything other than CSS.
+                    auto e = element::make(std::move(name));
+                    e->content = std::move(style);
+                    return e;
+                }
+
+                /// Regular element.
                 return parse_named_element(std::move(name), l);
             }
 
@@ -796,7 +810,8 @@ struct parser {
             /// Inline style.
             case tk::percent: {
                 element::inline_style style;
-                check(parse_inline_style(style));
+                advance();
+                check(parse_css_data(style));
                 return parse_named_element("div", l, {}, "", {}, std::move(style));
             }
 
@@ -811,6 +826,7 @@ struct parser {
     /// <element-named-rest> ::= { <element-data> } [ <content> ]
     /// <element-data> ::= <attr-list> | <inline-style> | CLASS | ID
     /// <element-text>  ::= [ TEXT ] <text-body>
+    /// <inline-style> ::= "%" <css-data>
     /// <content>  ::= "{" { <element> } "}" | <text-body>
     auto parse_named_element(
         std::string name,
@@ -842,7 +858,8 @@ struct parser {
                     break;
 
                 case tk::percent:
-                    check(parse_inline_style(style));
+                    advance();
+                    check(parse_css_data(style));
                     break;
 
                 default: std::unreachable();
@@ -977,11 +994,11 @@ struct parser {
     }
 
     /// Parse inline CSS.
-    /// <inline-style> ::= "%" "[" TEXT "]"
-    auto parse_inline_style(std::string& style) -> res<void> {
-        advance();
+    /// <css-data> ::= DELIMITER CSS DELIMITER
+    template <tk open = tk::lbrack, char open_char = '[', char close = ']'>
+    auto parse_css_data(std::string& style) -> res<void> {
         auto loc = tok.location;
-        if (not at(tk::lbrack)) return diag(diag_kind::error, loc, "Expected '[' after '%'");
+        if (not at(open)) return diag(diag_kind::error, loc, "Expected '{}' after (inline) style", tk_to_str(open));
 
         /// Very crude CSS string, brackets, and comment ‘parser’.
         u64 open_brackets = 1;
@@ -1012,13 +1029,12 @@ struct parser {
             }
 
             switch (lastc) {
-                case '[':
+                case open_char:
                     open_brackets++;
                     goto append;
 
-                case ']':
-                    open_brackets--;
-                    if (not open_brackets) goto done_parsing_css;
+                case close:
+                    if (not --open_brackets) goto done_parsing_css;
                     goto append;
 
                 case '/':
@@ -1047,7 +1063,7 @@ struct parser {
         }
 
     done_parsing_css:
-        if (lastc != ']') return diag(diag_kind::error, loc, "Unterminated inline style list starting here");
+        if (lastc != close) return diag(diag_kind::error, loc, "Unterminated (inline) style starting here");
         next_char();
         advance();
         return {};

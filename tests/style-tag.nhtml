@@ -1,0 +1,10 @@
+style {
+    .flex {
+        display: flex;
+        flex-direction: row;
+    }
+}
+
+div.flex {
+    .flex (test)
+}

@@ -205,7 +205,7 @@ EmptyLineBeforeAccessModifier: Leave
 FixNamespaceComments: true
 
 ## Macros that should be formatted like the `for` keyword.
-ForEachMacros: ["foreach", "foreach_ptr", "foreach_index", "foreach_value", "list_foreach", "FOREACH_INSTRUCTION_IN_FUNCTION"]
+ForEachMacros: []
 
 ## Same thing, but for `if`.
 IfMacros: []
@@ -300,7 +300,7 @@ PackConstructorInitializers: CurrentLine
 PenaltyReturnTypeOnItsOwnLine: 4294967295
 
 ## Left for C++, Right for C.
-PointerAlignment: Right
+PointerAlignment: Left
 
 ## Leave qualifiers where they are as the docs state that this option
 ## may lead to incorrect code.

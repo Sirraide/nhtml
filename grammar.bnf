@@ -1,11 +1,13 @@
 <document> ::= { <element> }
-<element>  ::= <element-named> | <element-text> | <element-implicit-div>
+<element>  ::= <element-named> | <element-text> | <element-implicit-div> | <style-tag>
 <element-named> ::= NAME <element-named-rest>
 <element-implicit-div> ::= ( <element-data> ) <element-named-rest>
 <element-named-rest> ::= { <element-data> } [ <content> ]
+<style-tag> ::= "style" <css-data>
 <element-data> ::= <attr-list> | <inline-style> | CLASS | ID
 <attr-list> ::= "[" { <attr> [ "," ] } "]"
-<inline-style> ::= "%" "[" TEXT "]"
+<inline-style> ::= "%" <css-data>
+<css-data> ::= DELIMITER CSS DELIMITER
 <attr> ::= NAME "=" VALUE
 <element-text>  ::= [ TEXT ] <text-body>
 <text-body> ::= "(" TOKENS ")"

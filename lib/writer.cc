@@ -179,6 +179,16 @@ struct html_writer {
             return;
         }
 
+        /// Style tag.
+        if (el.tag_name == "style") {
+            indent(i);
+            write("<style>\n");
+            write_text(std::get<std::string>(el.content), i + 1, 0);
+            indent(i);
+            write("\n</style>\n");
+            return;
+        }
+
         /// Check for XML elements.
         tempset in_xml = in_xml or el.tag_name == "svg";
 
