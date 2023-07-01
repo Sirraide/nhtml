@@ -195,6 +195,9 @@ public:
         return inserted;
     }
 
+    /// Find a value.
+    [[nodiscard]] auto find(std::string key) const { return map.find(tolower(std::move(key))); }
+
     auto begin() const { return map.begin(); }
     auto end() const { return map.end(); }
 };

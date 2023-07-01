@@ -1,7 +1,11 @@
 #include <deque>
+#include <duktape.h>
 #include <fmt/color.h>
+#include <functional>
 #include <nhtml/internal/file.hh>
+#include <nhtml/internal/utils.hh>
 #include <nhtml/parser.hh>
+#include <unordered_map>
 #include <utility>
 
 namespace nhtml::detail {
@@ -10,7 +14,11 @@ struct parser;
 using el = element::ptr;
 using err = std::unexpected<std::string>;
 
-#define check NHTML_CHECK
+#define check                       NHTML_CHECK
+#define DUKTAPE_FLAGS               (DUK_COMPILE_EVAL | DUK_COMPILE_NOSOURCE | DUK_COMPILE_NOFILENAME | DUK_COMPILE_SAFE)
+#define NHTML_PARSER_INSTANCE_KEY   DUK_GLOBAL_SYMBOL("nhtml.parser.instance")
+#define NHTML_ELEMENT_HANDLE_KEY    DUK_GLOBAL_SYMBOL("nhtml.element.handle")
+#define NHTML_ELEMENT_PROTOTYPE_KEY DUK_GLOBAL_SYMBOL("nhtml.element.prototype")
 
 /// ===========================================================================
 ///  Source locations.
@@ -80,8 +88,8 @@ struct loc {
 struct loc_info {
     usz line;
     usz col;
-    const char *line_start;
-    const char *line_end;
+    const char* line_start;
+    const char* line_end;
 };
 
 /// ===========================================================================
@@ -209,24 +217,32 @@ struct parser {
     std::deque<file> files;
 
     /// File stack.
-    std::vector<file *> file_stack;
+    std::vector<file*> file_stack;
 
     /// Parsed document.
     document doc;
 
+    /// Script evaluator.
+    duk_context* duk = duk_create_heap_default();
+
     /// Copying/Moving is disallowed.
-    parser() = default;
     parser(const parser&) = delete;
     parser(parser&&) = delete;
     parser& operator=(const parser&) = delete;
     parser& operator=(parser&&) = delete;
+
+    /// Load NHTML standard library.
+    parser();
+
+    /// Delete lua state.
+    ~parser() { duk_destroy_heap(duk); }
 
     /// =======================================================================
     ///  Lexer Operations
     /// =======================================================================
     /// Issue a diagnostic.
     template <typename... arguments>
-    auto diag(diag_kind kind, loc where, fmt::format_string<arguments...> fmt, arguments&&...args) -> std::unexpected<std::string> {
+    auto diag(diag_kind kind, loc where, fmt::format_string<arguments...> fmt, arguments&&... args) -> std::unexpected<std::string> {
         using fmt::fg;
         using enum fmt::emphasis;
         using enum fmt::terminal_color;
@@ -300,8 +316,8 @@ struct parser {
         return err(out);
     }
 
-    auto curr() const -> const char * { return file_stack.back()->curr; }
-    auto end() const -> const char * { return file_stack.back()->end; }
+    auto curr() const -> const char* { return file_stack.back()->curr; }
+    auto end() const -> const char* { return file_stack.back()->end; }
 
     auto lastc_loc() const -> loc {
         loc l;
@@ -311,7 +327,7 @@ struct parser {
         return l;
     }
 
-    auto look_ahead(usz number_of_tokens) -> res<token *> {
+    auto look_ahead(usz number_of_tokens) -> res<token*> {
         /// If we don't have enough tokens, lex them.
         if (lookahead_tokens.size() <= number_of_tokens) {
             auto current_token = std::move(tok);
@@ -685,19 +701,19 @@ struct parser {
         const auto& f = files[l.file];
 
         /// Seek back to the start of the line.
-        const char *const data = f.contents.data();
+        const char* const data = f.contents.data();
         info.line_start = data + l.pos;
         while (info.line_start > data and *info.line_start != '\n') info.line_start--;
         if (*info.line_start == '\n') info.line_start++;
 
         /// Seek forward to the end of the line.
-        const char *const line_end = data + f.contents.size();
+        const char* const line_end = data + f.contents.size();
         info.line_end = data + l.pos + l.len;
         while (info.line_end < line_end and *info.line_end != '\n') info.line_end++;
 
         /// Determine the line and column number.
         info.line = 1;
-        for (const char *d = data; d < data + l.pos; d++) {
+        for (const char* d = data; d < data + l.pos; d++) {
             if (*d == '\n') {
                 info.line++;
                 info.col = 0;
@@ -720,7 +736,7 @@ struct parser {
     } while (false)
 
     /// Parser primitives.
-    bool at(std::same_as<tk> auto&&...t) { return ((tok.type == t) or ...); }
+    bool at(std::same_as<tk> auto&&... t) { return ((tok.type == t) or ...); }
 
     /// Add a file.
     auto add_file(file&& f) -> res<void> {
@@ -753,7 +769,13 @@ struct parser {
             /// Parse an element.
             auto e = parse_element();
             if (not e) return err{e.error()};
-            doc.elements.push_back(std::move(*e));
+            if (e.value()) doc.elements.push_back(std::move(*e));
+            if (not doc.elements.empty()) {
+                duk_push_global_object(duk);
+                duk_push_pointer(duk, doc.elements.back().get());
+                duk_put_prop_string(duk, -2, "LastElement");
+                duk_pop(duk);
+            }
         }
 
         /// Return the document.
@@ -774,12 +796,27 @@ struct parser {
                 /// Style tags need special handling.
                 if (name == "style") {
                     std::string style;
-                    check(parse_css_data<tk::lbrace, '{', '}'>(style));
+                    check(parse_nested_language_data<tk::lbrace, '{', '}'>(style));
 
                     /// Style tags never contain other tags or anything other than CSS.
                     auto e = element::make(std::move(name));
                     e->content = std::move(style);
                     return e;
+                }
+
+                /// So do eval tags.
+                if (name == "eval") {
+                    std::string code{'{'};
+                    check(parse_nested_language_data<tk::lbrace, '{', '}', true>(code));
+                    code += '}';
+                    auto res = duk_eval_raw(duk, code.c_str(), code.size(), DUKTAPE_FLAGS);
+                    if (res != DUK_EXEC_SUCCESS) return diag(
+                        diag_kind::error,
+                        l,
+                        "{}",
+                        duk_safe_to_string(duk, -1)
+                    );
+                    return {};
                 }
 
                 /// Regular element.
@@ -811,7 +848,7 @@ struct parser {
             case tk::percent: {
                 element::inline_style style;
                 advance();
-                check(parse_css_data(style));
+                check(parse_nested_language_data(style));
                 return parse_named_element("div", l, {}, "", {}, std::move(style));
             }
 
@@ -859,7 +896,7 @@ struct parser {
 
                 case tk::percent:
                     advance();
-                    check(parse_css_data(style));
+                    check(parse_nested_language_data(style));
                     break;
 
                 default: std::unreachable();
@@ -867,7 +904,7 @@ struct parser {
         }
 
         /// Create an element, attach classes, etc.
-        auto make = [&](auto&&...args) -> res<el> {
+        auto make = [&](auto&&... args) -> res<el> {
             auto e = element::make(NHTML_FWD(args)...);
             e->classes = std::move(classes);
             e->id = std::move(id);
@@ -995,8 +1032,9 @@ struct parser {
 
     /// Parse inline CSS.
     /// <css-data> ::= DELIMITER CSS DELIMITER
-    template <tk open = tk::lbrack, char open_char = '[', char close = ']'>
-    auto parse_css_data(std::string& style) -> res<void> {
+    /// <eval-tag> ::= "eval" "{" TEXT "}"
+    template <tk open = tk::lbrack, char open_char = '[', char close = ']', bool line_comments = false>
+    auto parse_nested_language_data(std::string& style) -> res<void> {
         auto loc = tok.location;
         if (not at(open)) return diag(diag_kind::error, loc, "Expected '{}' after (inline) style", tk_to_str(open));
 
@@ -1044,6 +1082,14 @@ struct parser {
                         next_char();
                         continue;
                     }
+
+                    if constexpr (line_comments) {
+                        if (lastc == '/') {
+                            while (lastc and lastc != '\n') next_char();
+                            continue;
+                        }
+                    }
+
                     style += '/';
                     goto append;
 
@@ -1068,12 +1114,216 @@ struct parser {
         advance();
         return {};
     }
+
+    /// Select against a CSS selector.
+    auto query_selector_impl(std::string_view selector) -> element* {
+        /// Match a selector to an element.
+        const auto match = [&](element* e) {
+            bool tag_matched = false;
+            for (std::string_view sel = selector; not sel.empty();) {
+                /// Extract part of a selector.
+                const auto selector_part = [&](std::string_view seps) -> std::string_view {
+                    auto end = sel.find_first_of(seps);
+                    if (end == std::string_view::npos) end = sel.size();
+                    return sel.substr(0, end);
+                };
+
+                /// Match the selector.
+                switch (sel[0]) {
+                    /// Match id.
+                    case '#': {
+                        sel.remove_prefix(1);
+                        auto part = selector_part(".[");
+                        if (part != e->id) return false;
+                        sel.remove_prefix(part.size());
+                        break;
+                    }
+
+                    /// Match class.
+                    case '.': {
+                        sel.remove_prefix(1);
+                        auto part = selector_part("#[");
+                        if (rgs::find(e->classes, part) == e->classes.end()) return false;
+                        sel.remove_prefix(part.size());
+                        break;
+                    }
+
+                    /// Match attribute.
+                    case '[': {
+                        sel.remove_prefix(1);
+                        auto name = selector_part("=]");
+                        const auto it = e->attributes.find(std::string{name});
+                        if (it == e->attributes.end()) return false;
+
+                        /// Ignore everything up to ']'
+                        auto end = selector_part("]");
+                        sel.remove_prefix(end.size());
+                        if (sel[0] == ']') sel.remove_prefix(1);
+                        break;
+                    }
+
+                    /// Match tag. This is only allowed at the beginning of the selector.
+                    default: {
+                        if (tag_matched) return false;
+                        tag_matched = true;
+                        auto end = sel.find_first_of(".#[");
+                        if (sel.substr(0, end) != e->tag_name) return false;
+                        sel = sel.substr(end);
+                        break;
+                    }
+                }
+            }
+
+            /// If the selector is empty, we have a match.
+            return true;
+        };
+
+        /// Find the element.
+        for (auto& e : doc.elements) {
+            if (match(e.get())) return e.get();
+            if (std::holds_alternative<element::vector>(e->content))
+                for (auto& c : std::get<element::vector>(e->content))
+                    if (match(c.get()))
+                        return c.get();
+        }
+
+        return nullptr;
+    }
 };
 
 /// Parse a file.
 auto parse(file&& f) -> std::expected<document, std::string> {
     parser p;
     return p.parse(std::move(f));
+}
+
+/// Init duktape.
+parser::parser() {
+    /// Get the parser instance.
+    static const auto instance = [](duk_context* ctx) -> parser* {
+        /// Get parser instance.
+        duk_push_global_object(ctx);
+        defer { duk_pop(ctx); };
+        duk_get_prop_string(ctx, -1, NHTML_PARSER_INSTANCE_KEY);
+        defer { duk_pop(ctx); };
+        return static_cast<parser*>(duk_get_pointer(ctx, -1));
+    };
+
+    /// Define a function.
+    ///
+    /// The callback has to return either 0, 1, or a negative value. 0 means
+    /// that the function returns undefined, 1 means that the function returns
+    /// a single value on the stack, and a negative value is an error code.
+    const auto defun = [&](std::string_view name, duk_idx_t nargs, duk_c_function callback) {
+        duk_push_c_function(duk, callback, nargs);
+        duk_put_prop_string(duk, -2, name.data());
+    };
+
+    /// Get the attributes of an element.
+    const auto element_get_attrs = [](duk_context* ctx) -> duk_ret_t {
+        /// Get element pointer.
+        duk_push_this(ctx);
+        duk_get_prop_string(ctx, -1, NHTML_ELEMENT_HANDLE_KEY);
+        const auto e = static_cast<element*>(duk_get_pointer(ctx, -1));
+        duk_pop_2(ctx);
+
+        /// Create a map of attributes.
+        duk_push_object(ctx);
+        for (auto& [k, v] : e->attributes) {
+            duk_push_string(ctx, v.c_str());
+            duk_put_prop_string(ctx, -2, k.c_str());
+        }
+
+        return 1;
+    };
+
+    /// Save parser instance. We leave the global object on position 0.
+    duk_push_global_object(duk);
+    defer { duk_pop(duk); };
+    duk_push_pointer(duk, this);
+    duk_put_prop_string(duk, -2, NHTML_PARSER_INSTANCE_KEY);
+
+    /// Create prototype for element wrappers.
+    duk_push_object(duk);
+
+    /// Getter for attributes.
+    duk_push_string(duk, "attrs");
+    duk_push_c_function(duk, element_get_attrs, 0);
+    duk_def_prop(duk, -3, DUK_DEFPROP_HAVE_GETTER | DUK_DEFPROP_HAVE_ENUMERABLE | DUK_DEFPROP_ENUMERABLE);
+    duk_put_prop_string(duk, -2, NHTML_ELEMENT_PROTOTYPE_KEY);
+
+    /// Print to the console.
+    defun("Print", 1, [](duk_context* ctx) {
+        defer { duk_pop(ctx); };
+
+        /// Get a string representation of a value. We reuse the
+        /// string so we don't have to allocate a new one every time.
+        std::string _string_value;
+        const auto value_to_str = [&] (duk_idx_t index) -> std::string& {
+            _string_value.clear();
+            const auto s = duk_is_symbol(ctx, index) ? duk_get_string(ctx, index) : duk_safe_to_string(ctx, index);
+            if (duk_is_symbol(ctx, index)) _string_value = fmt::format("Symbol('{}')", s + 1);
+            else _string_value = s;
+            return _string_value;
+        };
+
+        /// Print an object recursively.
+        std::function<void(std::string)> print_object = [&] (std::string leading_text) {
+            duk_enum(ctx, -1, DUK_ENUM_INCLUDE_SYMBOLS);
+            defer { duk_pop(ctx); };
+            fmt::print("[Object] {{\n");
+            while (duk_next(ctx, -1, true)) {
+                fmt::print("{}    {}: ", leading_text, value_to_str(-2));
+                if (duk_is_object(ctx, -1)) print_object(leading_text + "    ");
+                else fmt::print("{}\n", value_to_str(-1));
+                duk_pop_2(ctx);
+            }
+            fmt::print("{}}}\n", leading_text);
+        };
+
+        /// If the top value is an object, print its keys.
+        if (duk_is_object(ctx, -1)) {
+            fmt::print("[NHTML] ");
+            print_object("[NHTML] ");
+        }
+
+        /// Otherwise, coerce it to a string.
+        else {
+            const auto str = duk_safe_to_string(ctx, -1);
+            fmt::print("[NHTML] {}\n", str);
+        }
+
+        return 0;
+    });
+
+    /// Get an element by a selector.
+    defun("QuerySelector", 1, [](duk_context* ctx) {
+        auto p = instance(ctx);
+        const std::string_view selector = duk_safe_to_string(ctx, -1);
+
+        /// Find the element.
+        auto e = p->query_selector_impl(selector);
+        if (not e) {
+            duk_pop(ctx);
+            duk_push_null(ctx);
+            return 1;
+        }
+
+        /// Pop argument.
+        duk_pop(ctx);
+
+        /// Create wrapper.
+        duk_push_object(ctx);
+        duk_push_pointer(ctx, e);
+        duk_put_prop_string(ctx, -2, NHTML_ELEMENT_HANDLE_KEY);
+
+        /// Set prototype.
+        duk_push_global_object(ctx);
+        duk_get_prop_string(ctx, -1, NHTML_ELEMENT_PROTOTYPE_KEY);
+        duk_set_prototype(ctx, -3);
+        duk_pop(ctx);
+        return 1;
+    });
 }
 
 } // namespace
