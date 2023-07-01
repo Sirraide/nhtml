@@ -14,12 +14,17 @@ using options = clopts< // clang-format off
     flag<"--f-no-indent", "Disable indenting">,
     flag<"--f-use-tabs", "Indent using tabs instead of spaces">,
     flag<"--f-self-close-xml-tags", "Use self-closing XML tags in e.g. SVGs">,
-    help
+    help<>
 >; // clang-format on
 
-template <static_string s>
+template <detail::static_string s>
 decltype(options::get<s>()) o() {
     return options::get<s>();
+}
+
+template <detail::static_string s>
+auto o(auto default_value) -> decltype(options::get_or<s>(default_value)) {
+    return options::get_or<s>(default_value);
 }
 
 template <typename... arguments>
@@ -44,8 +49,8 @@ auto get_options() -> nhtml::document::write_opts {
     };
 
     return {
-        .indent_width = u64(o<"--f-indent-width">() ? *o<"--f-indent-width">() : i64(wo::default_indent_width)),
-        .text_columns = u64(o<"--f-columns">() ? *o<"--f-columns">() : i64(wo::default_text_columns)),
+        .indent_width = u64(o<"--f-indent-width">(wo::default_indent_width)),
+        .text_columns = u64(o<"--f-columns">(wo::default_text_columns)),
         .attribute_quoting_style = get_quoting_style(),
         .no_indent = o<"--f-no-indent">() or wo::default_no_indent,
         .self_close_xml_tags = o<"--f-self-close-xml-tags">() or wo::default_self_close_xml_tags,
