@@ -1189,6 +1189,103 @@ struct parser {
 
         return nullptr;
     }
+
+    /// Print a JS value to the console.
+    template <bool include_symbols>
+    static auto print_impl(duk_context* ctx) -> duk_ret_t {
+        defer { duk_pop(ctx); };
+
+        /// Get a string representation of a value. We reuse the
+        /// string so we don't have to allocate a new one every time.
+        std::string _string_value;
+        const auto value_to_str = [&](duk_idx_t index, bool quote = true) -> std::string& {
+            _string_value.clear();
+            const auto s = duk_is_symbol(ctx, index) ? duk_get_string(ctx, index) : duk_safe_to_string(ctx, index);
+            if (duk_is_symbol(ctx, index)) _string_value = fmt::format("Symbol({})", s + 1);
+            else if (duk_is_string(ctx, index) and quote) _string_value = fmt::format("'{}'", s);
+            else _string_value = s;
+            return _string_value;
+        };
+
+        /// Helpers.
+        std::function<void(std::string)> print_object, print_array;
+
+        /// Print an array.
+        print_array = [&](std::string leading_text) {
+            /// Scan the array to check if it contains an object.
+            bool contains_object = false;
+            for (duk_size_t i = 0; i < duk_get_length(ctx, -1); i++) {
+                duk_get_prop_index(ctx, -1, duk_uarridx_t(i));
+                if (duk_is_object(ctx, -1)) {
+                    contains_object = true;
+                    duk_pop(ctx);
+                    break;
+                }
+                duk_pop(ctx);
+            }
+
+            /// If it does, print each element on a new line.
+            if (contains_object) {
+                fmt::print("[\n{}    ", leading_text);
+                for (duk_size_t i = 0; i < duk_get_length(ctx, -1); i++) {
+                    duk_get_prop_index(ctx, -1, duk_uarridx_t(i));
+                    print_object(leading_text + "    ");
+                    duk_pop(ctx);
+                }
+                fmt::print("{}]\n", leading_text);
+            }
+
+            /// Otherwise, print it on a single line.
+            else {
+                fmt::print("[");
+                for (duk_size_t i = 0; i < duk_get_length(ctx, -1); i++) {
+                    duk_get_prop_index(ctx, -1, duk_uarridx_t(i));
+                    fmt::print(" {}", value_to_str(-1));
+                    duk_pop(ctx);
+                }
+                fmt::print("]\n");
+            }
+        };
+
+        /// Print an object recursively.
+        print_object = [&](std::string leading_text) {
+            duk_enum(ctx, -1, include_symbols ? DUK_ENUM_INCLUDE_SYMBOLS : 0);
+            defer { duk_pop(ctx); };
+            bool printed = false;
+
+            /// Print each key-value pair.
+            while (duk_next(ctx, -1, true)) {
+                if (not printed) {
+                    printed = true;
+                    fmt::print("{{\n");
+                }
+
+                fmt::print("{}    {}: ", leading_text, value_to_str(-2, false));
+                if (duk_is_array(ctx, -1)) print_array(leading_text + "    ");
+                else if (duk_is_object(ctx, -1)) print_object(leading_text + "    ");
+                else fmt::print("{}\n", value_to_str(-1));
+                duk_pop_2(ctx);
+            }
+
+            /// If the object was empty, just format it as `{}`.
+            if (not printed) fmt::print("{{}}\n");
+            else fmt::print("{}}}\n", leading_text);
+        };
+
+        /// If the top value is an object, print its keys.
+        if (duk_is_object(ctx, -1)) {
+            fmt::print("[NHTML] ");
+            print_object("[NHTML] ");
+        }
+
+        /// Otherwise, coerce it to a string.
+        else {
+            const auto str = duk_safe_to_string(ctx, -1);
+            fmt::print("[NHTML] {}\n", str);
+        }
+
+        return 0;
+    }
 };
 
 /// Parse a file.
@@ -1209,23 +1306,32 @@ parser::parser() {
         return static_cast<parser*>(duk_get_pointer(ctx, -1));
     };
 
-    /// Define a function.
-    ///
-    /// The callback has to return either 0, 1, or a negative value. 0 means
-    /// that the function returns undefined, 1 means that the function returns
-    /// a single value on the stack, and a negative value is an error code.
-    const auto defun = [&](std::string_view name, duk_idx_t nargs, duk_c_function callback) {
-        duk_push_c_function(duk, callback, nargs);
-        duk_put_prop_string(duk, -2, name.data());
-    };
-
-    /// Get the attributes of an element.
-    const auto element_get_attrs = [](duk_context* ctx) -> duk_ret_t {
+    /// Get the element pointer from an element wrapper object.
+    static const auto element_pointer_from_this = [](duk_context* ctx) -> element* {
         /// Get element pointer.
         duk_push_this(ctx);
         duk_get_prop_string(ctx, -1, NHTML_ELEMENT_HANDLE_KEY);
         const auto e = static_cast<element*>(duk_get_pointer(ctx, -1));
         duk_pop_2(ctx);
+        return e;
+    };
+
+    /// Push an element wrapper object for an element pointer.
+    static const auto push_wrapped_element_pointer = [](duk_context* ctx, element* e) {
+        duk_push_object(ctx);
+        duk_push_pointer(ctx, e);
+        duk_put_prop_string(ctx, -2, NHTML_ELEMENT_HANDLE_KEY);
+
+        /// Set prototype.
+        duk_push_global_object(ctx);
+        duk_get_prop_string(ctx, -1, NHTML_ELEMENT_PROTOTYPE_KEY);
+        duk_set_prototype(ctx, -3);
+        duk_pop(ctx);
+    };
+
+    /// Get the attributes of an element.
+    static const auto element_get_attrs = [](duk_context* ctx) -> duk_ret_t {
+        auto e = element_pointer_from_this(ctx);
 
         /// Create a map of attributes.
         duk_push_object(ctx);
@@ -1236,6 +1342,51 @@ parser::parser() {
 
         return 1;
     };
+
+    /// Get the children of an element.
+    static const auto element_get_children = [](duk_context* ctx) -> duk_ret_t {
+        auto e = element_pointer_from_this(ctx);
+
+        /// Create an array of children.
+        duk_idx_t array_idx = duk_push_array(ctx);
+        if (std::holds_alternative<element::vector>(e->content)) {
+            auto& children = std::get<element::vector>(e->content);
+            for (size_t i = 0; i < children.size(); ++i) {
+                push_wrapped_element_pointer(ctx, children[i].get()); /// TODO: wrap with object.
+                duk_put_prop_index(ctx, array_idx, duk_uarridx_t(i));
+            }
+        }
+
+        return 1;
+    };
+
+    /// Get the ID of an element.
+    static const auto element_get_id = [](duk_context* ctx) -> duk_ret_t {
+        auto e = element_pointer_from_this(ctx);
+        duk_push_string(ctx, e->id.c_str());
+        return 1;
+    };
+
+    /// Set the ID of an element.
+    static const auto element_set_id = [](duk_context* ctx) -> duk_ret_t {
+        defer { duk_pop(ctx); };
+        auto e = element_pointer_from_this(ctx);
+        if (duk_is_null(ctx, -1)) e->id = "";
+        else e->id = duk_require_string(ctx, -1);
+        return 0;
+    };
+
+    /// Define a function.
+    ///
+    /// The callback has to return either 0, 1, or a negative value. 0 means
+    /// that the function returns undefined, 1 means that the function returns
+    /// a single value on the stack, and a negative value is an error code.
+    const auto defun = [&](std::string_view name, duk_idx_t nargs, duk_c_function callback) {
+        duk_push_c_function(duk, callback, nargs);
+        duk_put_prop_string(duk, -2, name.data());
+    };
+
+    /// Get the ID of an element.
 
     /// Save parser instance. We leave the global object on position 0.
     duk_push_global_object(duk);
@@ -1250,49 +1401,30 @@ parser::parser() {
     duk_push_string(duk, "attrs");
     duk_push_c_function(duk, element_get_attrs, 0);
     duk_def_prop(duk, -3, DUK_DEFPROP_HAVE_GETTER | DUK_DEFPROP_HAVE_ENUMERABLE | DUK_DEFPROP_ENUMERABLE);
+
+    /// Getter for children.
+    duk_push_string(duk, "children");
+    duk_push_c_function(duk, element_get_children, 0);
+    duk_def_prop(duk, -3, DUK_DEFPROP_HAVE_GETTER | DUK_DEFPROP_HAVE_ENUMERABLE | DUK_DEFPROP_ENUMERABLE);
+
+    /// Getter for id.
+    duk_push_string(duk, "id");
+    duk_push_c_function(duk, element_get_id, 0);
+    duk_push_c_function(duk, element_set_id, 1);
+    duk_def_prop(duk, -4, DUK_DEFPROP_HAVE_GETTER | DUK_DEFPROP_HAVE_SETTER | DUK_DEFPROP_HAVE_ENUMERABLE | DUK_DEFPROP_ENUMERABLE);
+
+    /// Save prototype in global object.
     duk_put_prop_string(duk, -2, NHTML_ELEMENT_PROTOTYPE_KEY);
 
     /// Print to the console.
+    defun("Display", 1, print_impl<false>);
+    defun("_Display", 1, print_impl<true>);
+
+    /// Print a string.
     defun("Print", 1, [](duk_context* ctx) {
         defer { duk_pop(ctx); };
-
-        /// Get a string representation of a value. We reuse the
-        /// string so we don't have to allocate a new one every time.
-        std::string _string_value;
-        const auto value_to_str = [&] (duk_idx_t index) -> std::string& {
-            _string_value.clear();
-            const auto s = duk_is_symbol(ctx, index) ? duk_get_string(ctx, index) : duk_safe_to_string(ctx, index);
-            if (duk_is_symbol(ctx, index)) _string_value = fmt::format("Symbol('{}')", s + 1);
-            else _string_value = s;
-            return _string_value;
-        };
-
-        /// Print an object recursively.
-        std::function<void(std::string)> print_object = [&] (std::string leading_text) {
-            duk_enum(ctx, -1, DUK_ENUM_INCLUDE_SYMBOLS);
-            defer { duk_pop(ctx); };
-            fmt::print("[Object] {{\n");
-            while (duk_next(ctx, -1, true)) {
-                fmt::print("{}    {}: ", leading_text, value_to_str(-2));
-                if (duk_is_object(ctx, -1)) print_object(leading_text + "    ");
-                else fmt::print("{}\n", value_to_str(-1));
-                duk_pop_2(ctx);
-            }
-            fmt::print("{}}}\n", leading_text);
-        };
-
-        /// If the top value is an object, print its keys.
-        if (duk_is_object(ctx, -1)) {
-            fmt::print("[NHTML] ");
-            print_object("[NHTML] ");
-        }
-
-        /// Otherwise, coerce it to a string.
-        else {
-            const auto str = duk_safe_to_string(ctx, -1);
-            fmt::print("[NHTML] {}\n", str);
-        }
-
+        const std::string_view selector = duk_safe_to_string(ctx, -1);
+        fmt::print("{}", selector);
         return 0;
     });
 
@@ -1311,17 +1443,7 @@ parser::parser() {
 
         /// Pop argument.
         duk_pop(ctx);
-
-        /// Create wrapper.
-        duk_push_object(ctx);
-        duk_push_pointer(ctx, e);
-        duk_put_prop_string(ctx, -2, NHTML_ELEMENT_HANDLE_KEY);
-
-        /// Set prototype.
-        duk_push_global_object(ctx);
-        duk_get_prop_string(ctx, -1, NHTML_ELEMENT_PROTOTYPE_KEY);
-        duk_set_prototype(ctx, -3);
-        duk_pop(ctx);
+        push_wrapped_element_pointer(ctx, e);
         return 1;
     });
 }
