@@ -52,9 +52,12 @@ struct html_writer {
     /// \param indent_level The indentation level.
     /// \param line_length The current line length.
     /// \return Whether we’ve emitted a newline.
-    void write_text(std::string_view text, usz indent_level, usz line_length) {
+    void write_text(std::string_view text, usz indent_level, usz line_length, bool wrap = true) {
         /// For line wrapping.
-        const usz max_line_length = std::max<usz>(opts.text_columns - indent_level * 4, 40);
+        const usz max_line_length =
+            wrap
+                ? std::max<usz>(opts.text_columns - indent_level * 4, 40)
+                : std::numeric_limits<usz>::max();
         bool have_line_break = false;
         bool need_indent = line_length == 0;
 
@@ -183,9 +186,10 @@ struct html_writer {
         if (el.tag_name == "style") {
             indent(i);
             write("<style>\n");
-            write_text(std::get<std::string>(el.content), i + 1, 0);
+            auto& txt = std::get<std::string>(el.content);
+            write("{}\n", txt);
             indent(i);
-            write("\n</style>\n");
+            write("</style>\n");
             return;
         }
 
