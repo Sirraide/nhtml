@@ -317,7 +317,7 @@ ReferenceAlignment: Left
 ReflowComments: true
 
 ## Requires clauses go on a separate line.
-RequiresClausePosition: OwnLine
+RequiresClausePosition: WithFollowing
 
 ## Thank goodness they finally added this. The default formatting used to be
 ## absolutely atrocious, because no, I don’t want all of my concept declarations

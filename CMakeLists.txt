@@ -148,6 +148,15 @@ if (EXISTS ${PROJECT_SOURCE_DIR}/libs)
 endif()
 
 ## ============================================================================
+##  V8.
+## ============================================================================
+if (NOT NHTML_DISABLE_EVAL)
+    target_link_libraries(options INTERFACE v8)
+else()
+    add_definitions(-DNHTML_DISABLE_EVAL)
+endif()
+
+## ============================================================================
 ##  Executables and libraries.
 ## ============================================================================
 ## Everything in ‘src’ is part of the project.

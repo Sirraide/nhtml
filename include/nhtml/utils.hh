@@ -198,8 +198,12 @@ public:
     /// Find a value.
     [[nodiscard]] auto find(std::string key) const { return map.find(tolower(std::move(key))); }
 
+    void clear() { map.clear(); }
+
     auto begin() const { return map.begin(); }
     auto end() const { return map.end(); }
+
+    usz size() const { return map.size(); }
 };
 
 /// Replace all occurrences of `from` with `to` in `str`.
