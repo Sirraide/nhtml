@@ -140,8 +140,13 @@ struct parser {
     /// Parsed document.
     document doc;
 
+#ifndef NHTML_DISABLE_EVAL
     /// Script evaluator.
     eval_ctx eval;
+
+    /// Scripts to evaluate.
+    std::vector<std::pair<std::string, loc>> scripts;
+#endif
 
     /// Copying/Moving is disallowed.
     parser(const parser&) = delete;

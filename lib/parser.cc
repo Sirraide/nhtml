@@ -487,6 +487,12 @@ auto nhtml::detail::parser::parse(file&& f) -> res<document> {
         if (e.value()) doc.elements.push_back(std::move(*e));
     }
 
+#ifndef NHTML_DISABLE_EVAL
+    for (auto& [script, location] : scripts)
+        if (auto res = eval(script, location); not res)
+            return err{res.error()};
+#endif
+
     /// Return the document.
     return std::move(doc);
 }
@@ -515,12 +521,18 @@ auto nhtml::detail::parser::parse_element() -> res<element::ptr> {
 
 #ifndef NHTML_DISABLE_EVAL
             /// So do eval tags.
-            if (name == "eval") {
+            if (name == "eval" or name == "eval!") {
                 std::string code{'{'};
                 check(parse_nested_language_data<tk::lbrace, '{', '}', true>(code));
                 code += '}';
-                auto res = eval(code, l);
-                if (not res) return err{res.error()};
+
+                if (name == "eval!") {
+                    auto res = eval(code, l);
+                    if (not res) return err{res.error()};
+                } else {
+                    scripts.emplace_back(std::move(code), l);
+                }
+
                 return {};
             }
 #endif
