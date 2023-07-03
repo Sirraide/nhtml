@@ -833,77 +833,82 @@ done_parsing_css:
     return {};
 }
 
-/// Select against a CSS selector.
-auto nhtml::detail::parser::query_selector_impl(std::string_view selector) -> element* {
-    /// Match a selector to an element.
-    const auto match = [&](element* e) {
-        bool tag_matched = false;
-        for (std::string_view sel = selector; not sel.empty();) {
-            /// Extract part of a selector.
-            const auto selector_part = [&](std::string_view seps) -> std::string_view {
-                auto end = sel.find_first_of(seps);
-                if (end == std::string_view::npos) end = sel.size();
-                return sel.substr(0, end);
-            };
+namespace {
+bool selector_matches(std::string_view sel, nhtml::element* e) {
+    bool tag_matched = false;
+    while (not sel.empty()) {
+        /// Extract part of a selector.
+        const auto selector_part = [&](std::string_view seps) -> std::string_view {
+            auto end = sel.find_first_of(seps);
+            if (end == std::string_view::npos) end = sel.size();
+            return sel.substr(0, end);
+        };
 
-            /// Match the selector.
-            switch (sel[0]) {
-                /// Match id.
-                case '#': {
-                    sel.remove_prefix(1);
-                    auto part = selector_part(".[");
-                    if (part != e->id) return false;
-                    sel.remove_prefix(part.size());
-                    break;
-                }
+        /// Match the selector.
+        switch (sel[0]) {
+            /// Match id.
+            case '#': {
+                sel.remove_prefix(1);
+                auto part = selector_part(".[");
+                if (part != e->id) return false;
+                sel.remove_prefix(part.size());
+                break;
+            }
 
-                /// Match class.
-                case '.': {
-                    sel.remove_prefix(1);
-                    auto part = selector_part("#[");
-                    if (rgs::find(e->classes, part) == e->classes.end()) return false;
-                    sel.remove_prefix(part.size());
-                    break;
-                }
+            /// Match class.
+            case '.': {
+                sel.remove_prefix(1);
+                auto part = selector_part("#[");
+                if (nhtml::rgs::find(e->classes, part) == e->classes.end()) return false;
+                sel.remove_prefix(part.size());
+                break;
+            }
 
-                /// Match attribute.
-                case '[': {
-                    sel.remove_prefix(1);
-                    auto name = selector_part("=]");
-                    const auto it = e->attributes.find(std::string{name});
-                    if (it == e->attributes.end()) return false;
+            /// Match attribute.
+            case '[': {
+                sel.remove_prefix(1);
+                auto name = selector_part("=]");
+                const auto it = e->attributes.find(std::string{name});
+                if (it == e->attributes.end()) return false;
 
-                    /// Ignore everything up to ']'
-                    auto end = selector_part("]");
-                    sel.remove_prefix(end.size());
-                    if (sel[0] == ']') sel.remove_prefix(1);
-                    break;
-                }
+                /// Ignore everything up to ']'
+                auto end = selector_part("]");
+                sel.remove_prefix(end.size());
+                if (sel[0] == ']') sel.remove_prefix(1);
+                break;
+            }
 
-                /// Match tag. This is only allowed at the beginning of the selector.
-                default: {
-                    if (tag_matched) return false;
-                    tag_matched = true;
-                    auto tag_name = selector_part(".#[");
-                    if (tag_name != e->tag_name) return false;
-                    sel.remove_prefix(tag_name.size());
-                    break;
-                }
+            /// Match tag. This is only allowed at the beginning of the selector.
+            default: {
+                if (tag_matched) return false;
+                tag_matched = true;
+                auto tag_name = selector_part(".#[");
+                if (tag_name != e->tag_name) return false;
+                sel.remove_prefix(tag_name.size());
+                break;
             }
         }
-
-        /// If the selector is empty, we have a match.
-        return true;
-    };
-
-    /// Find the element.
-    for (auto& e : doc.elements) {
-        if (match(e.get())) return e.get();
-        if (std::holds_alternative<element::vector>(e->content))
-            for (auto& c : std::get<element::vector>(e->content))
-                if (match(c.get()))
-                    return c.get();
     }
+
+    /// If the selector is empty, we have a match.
+    return true;
+};
+} // namespace
+
+auto nhtml::detail::parser::query_selector(std::string_view selector) -> element* {
+    for (auto& e : doc.elements)
+        if (auto res = query_selector_impl(selector, e.get()))
+            return res;
+
+    return nullptr;
+}
+
+auto nhtml::detail::parser::query_selector_impl(std::string_view selector, element* root) -> element* {
+    if (selector_matches(selector, root)) return root;
+    if (std::holds_alternative<element::vector>(root->content))
+        for (auto& c : std::get<element::vector>(root->content))
+            if (auto res = query_selector_impl(selector, c.get()))
+                return res;
 
     return nullptr;
 }

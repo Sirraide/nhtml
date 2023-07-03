@@ -289,7 +289,8 @@ struct parser {
     auto parse_attribute_list(element::attribute_list& attrs) -> res<void>;
 
     /// Select against a CSS selector.
-    auto query_selector_impl(std::string_view selector) -> element*;
+    auto query_selector(std::string_view selector) -> element*;
+    auto query_selector_impl(std::string_view selector, element* root) -> element*;
 
     template <tk open = tk::lbrack, char open_char = '[', char close = ']', bool line_comments = false>
     auto parse_nested_language_data(std::string& style) -> res<void>;

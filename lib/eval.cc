@@ -267,7 +267,7 @@ struct eval_impl {
         /// Perform query.
         auto this_ = context(I);
         String::Utf8Value selector{I, info[0]};
-        auto res = this_->p.query_selector_impl(std::string_view{*selector, size_t(selector.length())});
+        auto res = this_->p.query_selector(std::string_view{*selector, size_t(selector.length())});
         if (not res) return {};
 
         /// Return result.
