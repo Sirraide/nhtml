@@ -484,7 +484,7 @@ auto nhtml::detail::parser::parse(file&& f) -> res<document> {
         /// Parse an element.
         auto e = parse_element();
         if (not e) return err{e.error()};
-        if (e.value()) doc.elements.push_back(std::move(*e));
+        if (e.value() and e.value().get()) doc.elements.push_back(std::move(*e));
     }
 
 #ifndef NHTML_DISABLE_EVAL
@@ -657,7 +657,7 @@ auto nhtml::detail::parser::parse_named_element(
         while (not at(tk::rbrace)) {
             auto e = parse_element();
             if (not e) return err{e.error()};
-            elements.push_back(std::move(*e));
+            if (e.value() and e.value().get()) elements.push_back(std::move(*e));
         }
 
         /// Yeet "}".
