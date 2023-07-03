@@ -193,6 +193,46 @@ struct eval_impl {
                 return pair;
             }
         };
+
+        /// Access an attribute.
+        static void get(Local<Name> name, const PropertyCallbackInfo<Value>& info) {
+            auto I = info.GetIsolate();
+            HandleScope hs{I};
+
+            String::Utf8Value utf8{I, name};
+            auto h = handle(info);
+            auto it = h->attributes.find(std::string{*utf8, size_t(utf8.length())});
+            if (it != h->attributes.end()) {
+                info.GetReturnValue().Set(S(I, it->second));
+            }
+        }
+
+        /// Set an attribute.
+        static void set(Local<Name> name, Local<Value> val, const PropertyCallbackInfo<Value>& info) {
+            auto I = info.GetIsolate();
+            HandleScope hs{I};
+
+            auto h = handle(info);
+            String::Utf8Value utf8{I, name};
+            String::Utf8Value utf8_val{I, val->ToString(I->GetCurrentContext()).ToLocalChecked()};
+            h->attributes[std::string{*utf8, size_t(utf8.length())}] = std::string{*utf8_val, size_t(utf8_val.length())};
+        }
+
+        /// Delete an attribute.
+        static void del(Local<Name> name, const PropertyCallbackInfo<Boolean>& info) {
+            auto I = info.GetIsolate();
+            HandleScope hs{I};
+
+            auto h = handle(info);
+            String::Utf8Value utf8{I, name};
+            auto it = h->attributes.find(std::string{*utf8, size_t(utf8.length())});
+            if (it != h->attributes.end()) {
+                h->attributes.erase(it);
+                info.GetReturnValue().Set(true);
+            } else {
+                info.GetReturnValue().Set(false);
+            }
+        }
     };
 
     /// Accessors for children of an element.
@@ -350,6 +390,27 @@ struct eval_impl {
                 S(I, "next"),
                 FunctionTemplate::New(I, iterator_base<typename backing_type::iterator, typename backing_type::handle_type>::next)
             );
+        }
+
+        /// Register named property handlers.
+        if constexpr (
+            requires { backing_type::get; } or
+            requires { backing_type::set; } or
+            requires { backing_type::query; } or
+            requires { backing_type::del; } or
+            requires { backing_type::enumerate; } or
+            requires { backing_type::define; } or
+            requires { backing_type::describe; }
+        ) {
+            NamedPropertyHandlerConfiguration config{};
+            if constexpr (requires { backing_type::get; }) config.getter = backing_type::get;
+            if constexpr (requires { backing_type::set; }) config.setter = backing_type::set;
+            if constexpr (requires { backing_type::query; }) config.query = backing_type::query;
+            if constexpr (requires { backing_type::del; }) config.deleter = backing_type::del;
+            if constexpr (requires { backing_type::enumerate; }) config.enumerator = backing_type::enumerate;
+            if constexpr (requires { backing_type::define; }) config.definer = backing_type::define;
+            if constexpr (requires { backing_type::describe; }) config.descriptor = backing_type::describe;
+            tm->SetHandler(config);
         }
 
         return tm;

@@ -188,6 +188,25 @@ public:
     /// it to lowercase anyway to look up the value.
     [[nodiscard]] auto operator[](std::string key) -> value_type& { return map[tolower(std::move(key))]; }
 
+    /// Begin iterator.
+    [[nodiscard]] auto begin() const { return map.begin(); }
+
+    /// Empty the map.
+    void clear() { map.clear(); }
+
+    /// End iterator.
+    [[nodiscard]] auto end() const { return map.end(); }
+
+    /// Erase a value.
+    void erase(std::string key) { map.erase(tolower(std::move(key))); }
+    void erase(map_type::const_iterator it) { map.erase(it); }
+
+    /// Find a value.
+    [[nodiscard]] auto find(std::string key) const { return map.find(tolower(std::move(key))); }
+
+    /// Get the number of elements.
+    [[nodiscard]] usz size() const { return map.size(); }
+
     /// Insert a value only if it doesn’t already exist.
     /// \return true if the value was inserted, false if it already existed.
     [[nodiscard]] bool try_emplace(std::string key, value_type value) {
@@ -195,15 +214,6 @@ public:
         return inserted;
     }
 
-    /// Find a value.
-    [[nodiscard]] auto find(std::string key) const { return map.find(tolower(std::move(key))); }
-
-    void clear() { map.clear(); }
-
-    auto begin() const { return map.begin(); }
-    auto end() const { return map.end(); }
-
-    usz size() const { return map.size(); }
 };
 
 /// Replace all occurrences of `from` with `to` in `str`.
