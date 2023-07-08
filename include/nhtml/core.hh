@@ -7,6 +7,7 @@
 #include <set>
 #include <unordered_set>
 #include <vector>
+#include <atomic>
 
 namespace nhtml {
 /// Quoting style for attributes.
@@ -17,8 +18,44 @@ enum struct quoting_style {
 
 /// An NHTML element.
 struct element {
-    using ptr = std::unique_ptr<element>;
-    using vector = std::vector<element::ptr>;
+    class ptr {
+        element* data;
+
+    public:
+        ptr() : data(nullptr) {}
+        ptr(std::nullptr_t) : data(nullptr) {}
+        ptr(element* _data) : data(_data) { data->refcount++; }
+
+        ptr(const ptr& other) : data(other.data) { data->refcount++; }
+        ptr(ptr&& other) : data(other.data) { other.data = nullptr; }
+
+        ptr &operator=(const ptr& other) {
+            if (data) data->refcount--;
+            data = other.data;
+            data->refcount++;
+            return *this;
+        }
+
+        ptr &operator=(ptr&& other) {
+            if (data) data->refcount--;
+            data = other.data;
+            other.data = nullptr;
+            return *this;
+        }
+
+        ~ptr() {
+            if (data and --data->refcount == 0) delete data;
+        }
+
+        auto get() const -> element* { return data; }
+
+        explicit operator bool() const { return data; }
+        auto operator->() const -> element* { return data; }
+        auto operator*() const -> element& { return *data; }
+        bool operator==(const ptr& other) const { return data == other.data; }
+    };
+
+    using vector = std::vector<ptr>;
     using class_list = std::set<std::string>;
     using attribute_list = detail::icase_map<std::string>;
     using inline_style = std::string;
@@ -39,6 +76,9 @@ struct element {
     std::variant<std::monostate, std::string, vector> content = std::monostate{};
 
 private:
+    /// Reference count.
+    std::atomic<usz> refcount = 0;
+
     explicit element() {}
     explicit element(std::string _tag_name)
         : tag_name(std::move(_tag_name)) {}

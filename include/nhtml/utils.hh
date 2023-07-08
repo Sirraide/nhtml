@@ -213,7 +213,6 @@ public:
         auto [it, inserted] = map.try_emplace(tolower(std::move(key)), std::move(value));
         return inserted;
     }
-
 };
 
 /// Replace all occurrences of `from` with `to` in `str`.

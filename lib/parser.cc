@@ -530,8 +530,8 @@ auto nhtml::detail::parser::parse_element() -> res<element::ptr> {
             auto name = tolower(tok.text);
             advance();
 
-            /// Style tags need special handling.
-            if (name == "style") {
+            /// Style tags need special handling if followed by a brace.
+            if (name == "style" and at(tk::lbrace)) {
                 std::string style;
                 check(parse_nested_language_data<tk::lbrace, '{', '}'>(style));
 

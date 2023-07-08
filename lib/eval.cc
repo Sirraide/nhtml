@@ -9,17 +9,48 @@ using namespace nhtml::detail;
 using namespace v8;
 
 namespace nhtml::detail {
+/// Create a new string.
+static Local<String> S(Isolate* I, auto&& str) {
+    if constexpr (requires { str.data(); }) {
+        auto s = String::NewFromUtf8(
+            I,
+            std::forward<decltype(str)>(str).data(),
+            NewStringType::kNormal,
+            int(std::forward<decltype(str)>(str).size())
+        );
+
+        return s.ToLocalChecked();
+    } else {
+        return String::NewFromUtf8(I, std::forward<decltype(str)>(str)).ToLocalChecked();
+    }
+}
+
+struct function_template {
+    Persistent<FunctionTemplate> tmpl;
+
+    /// Create a new instance.
+    auto operator()(Isolate* I) -> Local<Object> {
+        auto ctx = I->GetCurrentContext();
+        return tmpl.Get(I)->GetFunction(ctx).ToLocalChecked()->NewInstance(ctx).ToLocalChecked();
+    }
+
+    /// Check if an object is an instance of this template.
+    auto is(Isolate* I, Local<Value> obj) -> bool {
+        return tmpl.Get(I)->HasInstance(obj);
+    }
+};
+
 struct eval_impl {
     using eval = eval_impl;
     ArrayBuffer::Allocator* alloc;
     Isolate* isolate;
     parser& p;
     Persistent<ObjectTemplate> globl_tmpl;
-    Persistent<ObjectTemplate> element_tmpl;
-    Persistent<ObjectTemplate> children_tmpl;
-    Persistent<ObjectTemplate> attributes_tmpl;
-    Persistent<ObjectTemplate> attributes_it_tmpl;
-    Persistent<ObjectTemplate> children_it_tmpl;
+    function_template element_tmpl;
+    function_template children_tmpl;
+    function_template attributes_tmpl;
+    function_template attributes_it_tmpl;
+    function_template children_it_tmpl;
 
     /// Helper to export a global function. Must not be called outside the constructor.
     template <auto cb>
@@ -37,7 +68,7 @@ struct eval_impl {
     /// ===========================================================================
     ///  Object template helpers.
     /// ===========================================================================
-    using template_t = Persistent<ObjectTemplate> eval_impl::*;
+    using template_t = function_template eval_impl::*;
 
     /// CRTP helper for types that have a native handle pointer.
     template <typename handle_ty, template_t obj_templ, std::size_t fields = 1>
@@ -46,6 +77,12 @@ struct eval_impl {
         static auto handle(const auto& info) -> handle_ty* {
             return static_cast<handle_ty*>(
                 Local<External>::Cast(info.Holder()->GetInternalField(0))->Value()
+            );
+        }
+
+        static auto handle(Isolate* I, Local<Value> info) -> handle_ty* {
+            return static_cast<handle_ty*>(
+                Local<External>::Cast(info->ToObject(I->GetCurrentContext()).ToLocalChecked()->GetInternalField(0))->Value()
             );
         }
 
@@ -93,7 +130,7 @@ struct eval_impl {
 
             /// Create iterator.
             auto e = derived::handle(info);
-            auto iter = instantiate(I, context(I)->*iterator_obj_templ);
+            auto iter = (context(I)->*iterator_obj_templ)(I);
             iter->SetInternalField(0, External::New(I, e));
             iter->SetInternalField(1, Integer::New(I, 0));
             info.GetReturnValue().Set(iter);
@@ -107,13 +144,35 @@ struct eval_impl {
     /// ===========================================================================
     /// Accessors for elements.
     struct $element : object<element, &eval::element_tmpl> {
+        static void register_interface(Isolate* I, Local<ObjectTemplate> inst, Local<ObjectTemplate> proto) {
+            inst->SetAccessor(S(I, "attributes"), get_attributes, set_attributes);
+            inst->SetAccessor(S(I, "children"), get_children);
+            inst->SetAccessor(S(I, "id"), get_id, set_id);
+            proto->Set(S(I, "toString"), FunctionTemplate::New(I, to_string));
+        }
+
+        /// Stringify an element.
+        static auto stringify(element* e) -> std::string {
+            auto s = fmt::format("#Element<{}, {}", fmt::ptr(e), e->tag_name);
+            if (not e->id.empty()) s += fmt::format(", #{}>", e->id);
+            else s += ">";
+            return s;
+        }
+
+        /// toString() implementation.
+        static void to_string(const FunctionCallbackInfo<Value>& info) {
+            auto I = info.GetIsolate();
+            HandleScope hs{I};
+            info.GetReturnValue().Set(S(I, stringify(handle(info))));
+        }
+
         /// Get attributes of an element.
         static void get_attributes(Local<String>, const PropertyCallbackInfo<Value>& info) {
             auto I = info.GetIsolate();
             HandleScope hs{I};
 
             /// Create wrapper.
-            Local<Object> obj = instantiate(I, context(I)->attributes_tmpl);
+            Local<Object> obj = context(I)->attributes_tmpl(I);
             obj->SetInternalField(0, External::New(I, handle(info)));
             info.GetReturnValue().Set(obj);
         }
@@ -124,7 +183,7 @@ struct eval_impl {
             HandleScope hs{I};
 
             /// Create wrapper.
-            Local<Object> obj = instantiate(I, context(I)->children_tmpl);
+            Local<Object> obj = context(I)->children_tmpl(I);
             obj->SetInternalField(0, External::New(I, handle(info)));
             info.GetReturnValue().Set(obj);
         }
@@ -247,11 +306,57 @@ struct eval_impl {
 
             static auto value(Isolate* I, handle_type* e, int index) {
                 auto it = std::next(std::get<element::vector>(e->content).begin(), index);
-                auto r = context(I)->element_tmpl.Get(I)->NewInstance(I->GetCurrentContext()).ToLocalChecked();
+                auto r = context(I)->element_tmpl(I);
                 r->SetInternalField(0, External::New(I, it->get()));
                 return r;
             }
         };
+
+        /// Add functions to prototype.
+        static void register_interface(Isolate* I, Local<ObjectTemplate> inst, Local<ObjectTemplate> proto) {
+            proto->Set(S(I, "push"), FunctionTemplate::New(I, push));
+            proto->Set(S(I, "toString"), FunctionTemplate::New(I, $children::to_string));
+        }
+
+        /// toString() implementation.
+        static void to_string(const FunctionCallbackInfo<Value>& info) {
+            auto I = info.GetIsolate();
+            HandleScope hs{I};
+            auto h = handle(info);
+            auto s = fmt::format("#ChildrenOf<{}>", $element::stringify(h));
+            info.GetReturnValue().Set(S(I, s));
+        }
+
+        /// Add a new child.
+        static void push(const FunctionCallbackInfo<Value>& info) {
+            auto I = info.GetIsolate();
+            auto ctx = I->GetCurrentContext();
+            HandleScope hs{I};
+
+            /// Make sure we have an object.
+            if (info.Length() < 1 or not info[0]->IsObject()) {
+                I->ThrowError("Argument of `push()` must be an element");
+                return;
+            }
+
+            /// Make sure it’s an element.
+            auto e = info[0]->ToObject(ctx).ToLocalChecked();
+            if (not context(I)->element_tmpl.is(I, e)) {
+                I->ThrowError("Argument of `push()` must be an element");
+                return;
+            }
+
+            /// Get the children.
+            auto h = handle(info);
+            auto ch = std::get_if<element::vector>(&h->content);
+            if (not ch) {
+                h->content = element::vector{};
+                ch = &std::get<element::vector>(h->content);
+            }
+
+            /// Add the child.
+            ch->emplace_back($element::handle(I, e));
+        }
     };
 
     /// ===========================================================================
@@ -271,9 +376,227 @@ struct eval_impl {
         if (not res) return {};
 
         /// Return result.
-        auto r = this_->element_tmpl.Get(I)->NewInstance(I->GetCurrentContext()).ToLocalChecked();
+        auto r = this_->element_tmpl(I);
         r->SetInternalField(0, External::New(I, res));
         return r;
+    }
+
+    /// Create an element.
+    ///
+    /// function element(
+    ///     name: string,
+    ///     content?: string | element | element[],
+    ///     attributes?: object | [string?, string? | string[], object?]
+    /// ): element
+    ///
+    /// The attributes are either an object, in which case they are used as-is,
+    /// or a 3-tuple whose first value is the id of the element, the second the
+    /// class list, and the third the attributes.
+    static Local<Value> $make_element(const FunctionCallbackInfo<Value>& info) {
+        auto I = info.GetIsolate();
+        auto C = context(I);
+        auto ctx = I->GetCurrentContext();
+
+        /// See the JS signature above for a description of the arguments.
+        if (info.Length() < 1 or not info[0]->IsString()) {
+            I->ThrowError("element() constructor takes at least one string argument");
+            return {};
+        }
+
+        /// Create the element.
+        auto el = element::make();
+
+        /// Set the name.
+        String::Utf8Value tag_name{I, info[0]};
+        el->tag_name = std::string{*tag_name, size_t(tag_name.length())};
+
+        /// Set the content, if any.
+        if (info.Length() >= 2) {
+            auto content = info[1];
+
+            /// No content.
+            if (content->IsNullOrUndefined()) {
+                /// Do nothing.
+            }
+
+            /// Text content.
+            else if (content->IsString()) {
+                String::Utf8Value str_content{I, content};
+                el->content = std::string{*str_content, size_t(str_content.length())};
+            }
+
+            /// Array of elements.
+            else if (content->IsArray()) {
+                /// Set content to a vector.
+                el->content = element::vector{};
+
+                /// Add the elements.
+                auto& els = std::get<element::vector>(el->content);
+                auto arr = content->ToObject(ctx).ToLocalChecked().As<Array>();
+                for (u32 i = 0, end = arr->Length(); i < end; i++) {
+                    /// Make sure it’s an element.
+                    auto v = arr->Get(ctx, i).ToLocalChecked();
+                    if (not C->element_tmpl.is(I, v)) {
+                        I->ThrowError(S(I, fmt::format("Element {} of content array was not an element", i)));
+                        return {};
+                    }
+
+                    /// Add it.
+                    els.emplace_back($element::handle(I, v));
+                }
+            }
+
+            /// Single element.
+            else if (content->IsObject()) {
+                if (not C->element_tmpl.is(I, content)) {
+                    I->ThrowError("Content argument of element() constructor was not an element");
+                    return {};
+                }
+
+                el->content = element::vector{$element::handle(I, content)};
+            }
+
+            /// Nonsense.
+            else {
+                I->ThrowError("Content argument of element() constructor must be a string, element, or array of elements");
+                return {};
+            }
+        }
+
+        /// Set id, classes, and attributes, if any.
+        if (info.Length() >= 3) {
+            auto extra = info[2];
+
+            /// Add attributes from an object.
+            const auto add_attributes = [&] [[nodiscard]] (Local<Object> attrs) {
+                auto names = attrs->GetOwnPropertyNames(ctx).ToLocalChecked();
+                for (u32 i = 0, end = names->Length(); i < end; i++) {
+                    /// Skip if the value is null.
+                    auto name = names->Get(ctx, i).ToLocalChecked();
+                    auto value = attrs->Get(ctx, name).ToLocalChecked();
+                    if (value->IsNullOrUndefined()) continue;
+
+                    /// Get the key.
+                    String::Utf8Value utf8_name{I, name};
+                    auto key = std::string{*utf8_name, size_t(utf8_name.length())};
+
+                    /// Make sure the value is a string or null.
+                    if (not value->IsString()) {
+                        I->ThrowError(S(I, fmt::format("Attribute value for key '{}' was not a string", key)));
+                        return false;
+                    }
+
+                    /// Add the attribute.
+                    String::Utf8Value utf8_value{I, value};
+                    auto val = std::string{*utf8_value, size_t(utf8_value.length())};
+                    el->attributes[std::move(key)] = std::move(val);
+                }
+
+                return true;
+            };
+
+            /// No extra data.
+            if (extra->IsNullOrUndefined()) {
+                /// Do nothing.
+            }
+
+            /// Id, classes, and attributes.
+            else if (extra->IsArray()) {
+                auto arr = extra->ToObject(ctx).ToLocalChecked().As<Array>();
+
+                /// ID.
+                if (arr->Length() >= 1) {
+                    auto id = arr->Get(ctx, 0).ToLocalChecked();
+                    if (id->IsNullOrUndefined()) { /** No id. **/
+                    } else if (id->IsString()) {
+                        String::Utf8Value utf8{I, id};
+                        el->id = std::string{*utf8, size_t(utf8.length())};
+                    } else {
+                        I->ThrowError("First element of attributes array must be a string or null");
+                        return {};
+                    }
+                }
+
+                /// Class list.
+                if (arr->Length() >= 2) {
+                    auto classes = arr->Get(ctx, 1).ToLocalChecked();
+
+                    /// Add a class.
+                    const auto add_class = [&] [[nodiscard]] (Local<Value> class_name) {
+                        if (class_name->IsNullOrUndefined()) return true;
+                        if (class_name->IsString()) {
+                            String::Utf8Value utf8{I, class_name};
+                            if (not el->attributes["class"].empty()) el->attributes["class"] += " ";
+                            el->attributes["class"] += std::string{*utf8, size_t(utf8.length())};
+                            return true;
+                        } else {
+                            I->ThrowError("Class list must be an array of (optionally null) strings");
+                            return false;
+                        }
+                    };
+
+                    /// No classes.
+                    if (classes->IsNullOrUndefined()) {
+                        /// Nothing to do.
+                    }
+
+                    /// Each element of the array is a class.
+                    else if (classes->IsArray()) {
+                        auto class_arr = classes->ToObject(ctx).ToLocalChecked().As<Array>();
+                        for (u32 i = 0, end = class_arr->Length(); i < end; i++) {
+                            auto class_name = class_arr->Get(ctx, i).ToLocalChecked();
+                            if (not add_class(class_name)) return {};
+                        }
+                    }
+
+                    /// The element is a single class.
+                    else if (classes->IsString()) {
+                        if (not add_class(classes)) return {};
+                    }
+                }
+
+                /// Attributes.
+                if (arr->Length() >= 3) {
+                    auto attrs = arr->Get(ctx, 2).ToLocalChecked();
+
+                    /// Do nothing.
+                    if (attrs->IsNullOrUndefined()) {
+                        /// Nothing to do.
+                    }
+
+                    /// Attributes must be an object.
+                    else if (attrs->IsObject()) {
+                        if (not add_attributes(attrs->ToObject(ctx).ToLocalChecked())) return {};
+                    }
+
+                    /// Nonsense.
+                    else {
+                        I->ThrowError("Third element of attributes array must be an object or null");
+                        return {};
+                    }
+                }
+            }
+
+            /// Just attributes.
+            else if (extra->IsObject()) {
+                if (not add_attributes(extra->ToObject(ctx).ToLocalChecked())) return {};
+            }
+
+            /// Nonsense.
+            else {
+                I->ThrowError("Third argument of element() constructor must be an array or object");
+                return {};
+            }
+        }
+
+        /// Save the element as a floating element to make sure it isn’t deleted.
+        auto raw = el.get();
+        C->p.floating_elements.push_back(std::move(el));
+
+        /// Create the JS wrapper object.
+        auto obj = C->element_tmpl(I);
+        obj->SetInternalField(0, External::New(I, raw));
+        return obj;
     }
 
     /// Print to stdout.
@@ -322,28 +645,12 @@ struct eval_impl {
         /// Set globals.
         export_global<$print>(g_tm, "print");
         export_global<$$>(g_tm, "$");
+        export_global<$make_element>(g_tm, "element");
 
         /// Template for element wrapper objects.
-        auto elem_tm = register_template<$element>();
-        register_template<$attributes>();
+        register_template<$element>();
         register_template<$children>();
-
-        elem_tm->SetAccessor(
-            S(I, "attributes"),
-            $element::get_attributes,
-            $element::set_attributes
-        );
-
-        elem_tm->SetAccessor(
-            S(I, "children"),
-            $element::get_children
-        );
-
-        elem_tm->SetAccessor(
-            S(I, "id"),
-            $element::get_id,
-            $element::set_id
-        );
+        register_template<$attributes>();
     }
 
     /// ===========================================================================
@@ -357,16 +664,11 @@ struct eval_impl {
     /// Get the parser from the isolate.
     static auto context(Isolate* I) -> eval_impl* { return static_cast<eval_impl*>(I->GetData(0)); }
 
-    /// Create a new JS object from a template.
-    static auto instantiate(Isolate* I, Persistent<ObjectTemplate>& templ) -> Local<Object> {
-        return templ.Get(I)->NewInstance(I->GetCurrentContext()).ToLocalChecked();
-    }
-
     /// Create an object template.
     template <typename backing_type>
-    auto register_template() -> Local<ObjectTemplate> {
+    auto register_template() -> Local<FunctionTemplate> {
         /// Sanity check.
-        if (not(this->*backing_type::object_template).IsEmpty()) {
+        if (not(this->*backing_type::object_template).tmpl.IsEmpty()) {
             fmt::print(stderr, "Internal error: template already registered\n");
             fmt::print(stderr, "In: {}\n", __PRETTY_FUNCTION__);
             std::abort();
@@ -374,26 +676,37 @@ struct eval_impl {
 
         /// Create template.
         auto I = isolate;
-        auto tm = ObjectTemplate::New(I);
-        (this->*backing_type::object_template).Reset(I, tm);
-        tm->SetInternalFieldCount(backing_type::field_count);
+        auto tm = FunctionTemplate::New(I);
+        (this->*backing_type::object_template).tmpl.Reset(I, tm);
+        tm->InstanceTemplate()->SetInternalFieldCount(backing_type::field_count);
+
+        /// Register additional callbacks.
+        if constexpr (requires { backing_type::register_interface; }) {
+            backing_type::register_interface(I, tm->InstanceTemplate(), tm->PrototypeTemplate());
+        }
 
         /// Iterables.
         if constexpr (requires { backing_type::create_iterator; }) {
             static_assert(backing_type::field_count >= 1, "Iterable types must a backing native handle");
-            tm->Set(
+            tm->PrototypeTemplate()->Set(
                 Symbol::GetIterator(I),
                 FunctionTemplate::New(I, backing_type::create_iterator)
             );
 
             /// Iterator type.
-            auto iterator_tm = ObjectTemplate::New(I);
-            iterator_tm->SetInternalFieldCount(2);
-            (this->*backing_type::iterator_object_template).Reset(I, iterator_tm);
-            iterator_tm->Set(
+            using iter_type = backing_type::iterator;
+            auto iterator_tm = FunctionTemplate::New(I);
+            iterator_tm->InstanceTemplate()->SetInternalFieldCount(2);
+            (this->*backing_type::iterator_object_template).tmpl.Reset(I, iterator_tm);
+            iterator_tm->PrototypeTemplate()->Set(
                 S(I, "next"),
-                FunctionTemplate::New(I, iterator_base<typename backing_type::iterator, typename backing_type::handle_type>::next)
+                FunctionTemplate::New(I, iterator_base<iter_type, typename backing_type::handle_type>::next)
             );
+
+            /// Register additional callbacks.
+            if constexpr (requires { iter_type::register_interface; }) {
+                iter_type::register_interface(I, tm->PrototypeTemplate(), tm->PrototypeTemplate());
+            }
         }
 
         /// Register named property handlers.
@@ -414,26 +727,10 @@ struct eval_impl {
             if constexpr (requires { backing_type::enumerate; }) config.enumerator = backing_type::enumerate;
             if constexpr (requires { backing_type::define; }) config.definer = backing_type::define;
             if constexpr (requires { backing_type::describe; }) config.descriptor = backing_type::describe;
-            tm->SetHandler(config);
+            tm->InstanceTemplate()->SetHandler(config);
         }
 
         return tm;
-    }
-
-    /// Create a new string.
-    static Local<String> S(Isolate* I, auto&& str) {
-        if constexpr (requires { str.data(); }) {
-            auto s = String::NewFromUtf8(
-                I,
-                std::forward<decltype(str)>(str).data(),
-                NewStringType::kNormal,
-                int(std::forward<decltype(str)>(str).size())
-            );
-
-            return s.ToLocalChecked();
-        } else {
-            return String::NewFromUtf8(I, std::forward<decltype(str)>(str)).ToLocalChecked();
-        }
     }
 };
 
@@ -508,6 +805,9 @@ auto nhtml::detail::eval_ctx::operator()(string_ref script_data, loc where) -> r
     Local<Context> ctx{Context::New(I, nullptr, impl->globl_tmpl.Get(I))};
     Context::Scope cs{ctx};
     Local<Script> script;
+
+    /// Update globals.
+    ctx->Global()->Set(ctx, S(I, "filename"), S(I, impl->p.files[0].name.string())).Check();
 
     /// Compile script.
     auto text = String::NewFromUtf8(I, script_data.data(), NewStringType::kNormal, int(script_data.size())).ToLocalChecked();

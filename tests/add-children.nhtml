@@ -1,0 +1,8 @@
+#foo {
+    div
+}
+
+eval {
+    const foo = $('#foo').children
+    foo.push(element('div'))
+}
