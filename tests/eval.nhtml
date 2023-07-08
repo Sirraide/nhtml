@@ -1,0 +1,13 @@
+div[bla=12345] {
+    /foobar[foo=bar]#baz (Baz)
+    /foobar[foo=bar]#baz (Baz)
+    /foobar[foo=bar]#baz (Baz)
+    /foobar[foo=bar]#baz (Baz)
+    /foobar[foo=bar]#baz (Baz)
+}
+
+eval {
+    $('div').attributes = {foo : 'bar', baz : 'qux', quux : 'quuz'}
+    $('a').id = 1
+    for (const ch of $('div').children) delete ch.attributes.href
+}
