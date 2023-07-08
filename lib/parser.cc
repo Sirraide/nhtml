@@ -1,5 +1,4 @@
 #include <deque>
-#include <duktape.h>
 #include <fmt/color.h>
 #include <functional>
 #include <nhtml/internal/parser_impl.hh>
@@ -9,11 +8,7 @@
 
 using namespace nhtml::detail;
 
-#define check                       NHTML_CHECK
-#define DUKTAPE_FLAGS               (DUK_COMPILE_EVAL | DUK_COMPILE_NOSOURCE | DUK_COMPILE_NOFILENAME | DUK_COMPILE_SAFE)
-#define NHTML_PARSER_INSTANCE_KEY   DUK_GLOBAL_SYMBOL("nhtml.parser.instance")
-#define NHTML_ELEMENT_HANDLE_KEY    DUK_GLOBAL_SYMBOL("nhtml.element.handle")
-#define NHTML_ELEMENT_PROTOTYPE_KEY DUK_GLOBAL_SYMBOL("nhtml.element.prototype")
+#define check NHTML_CHECK
 
 /// ===========================================================================
 ///  Parser

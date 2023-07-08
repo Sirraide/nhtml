@@ -178,7 +178,6 @@ endif()
 ## Apply our options.
 target_include_directories(nhtml PUBLIC "${PROJECT_SOURCE_DIR}/include")
 target_link_libraries(nhtml PRIVATE options)
-target_link_libraries(nhtml PUBLIC duktape)
 target_link_libraries(nhtmlc PRIVATE options nhtml)
 if (UNIX)
     target_compile_definitions(run-tests PRIVATE "__NHTML_DIR__=${PROJECT_SOURCE_DIR}")
