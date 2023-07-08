@@ -147,6 +147,10 @@ if (EXISTS ${PROJECT_SOURCE_DIR}/libs)
     endforeach()
 endif()
 
+if (DEFINED CLOPTS_INCLUDE_DIR)
+    target_include_directories(options INTERFACE "${CLOPTS_INCLUDE_DIR}")
+endif()
+
 ## ============================================================================
 ##  V8.
 ## ============================================================================
@@ -170,16 +174,24 @@ endif()
 
 ## Add the library and the executable.
 add_library(nhtml STATIC ${library_sources})
-add_executable(nhtmlc src/nhtmlc.cc)
-if (UNIX)
+
+if (NHTML_BUILD_NHTMLC)
+    add_executable(nhtmlc src/nhtmlc.cc)
+endif()
+
+if (UNIX AND NHTML_BUILD_TESTS)
     add_executable(run-tests src/test_runner.cc)
 endif()
 
 ## Apply our options.
 target_include_directories(nhtml PUBLIC "${PROJECT_SOURCE_DIR}/include")
 target_link_libraries(nhtml PRIVATE options)
-target_link_libraries(nhtmlc PRIVATE options nhtml)
-if (UNIX)
+
+if (NHTML_BUILD_NHTMLC)
+    target_link_libraries(nhtmlc PRIVATE options nhtml)
+endif()
+
+if (UNIX AND NHTML_BUILD_TESTS)
     target_compile_definitions(run-tests PRIVATE "__NHTML_DIR__=${PROJECT_SOURCE_DIR}")
     target_link_libraries(run-tests PRIVATE options nhtml)
 endif()
