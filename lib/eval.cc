@@ -1,6 +1,7 @@
 #ifndef NHTML_DISABLE_EVAL
 #    include <expected>
 #    include <libplatform/libplatform.h>
+#    include <mutex>
 #    include <nhtml/internal/eval.hh>
 #    include <nhtml/internal/parser_impl.hh>
 
@@ -10,7 +11,6 @@ using namespace v8;
 namespace nhtml::detail {
 struct eval_impl {
     using eval = eval_impl;
-    std::unique_ptr<Platform> v8_platform;
     ArrayBuffer::Allocator* alloc;
     Isolate* isolate;
     parser& p;
@@ -298,11 +298,15 @@ struct eval_impl {
     /// ===========================================================================
     eval_impl(parser& _p)
         : p{_p} {
-        V8::InitializeICU();
-        V8::InitializeExternalStartupData(nullptr);
-        v8_platform = platform::NewDefaultPlatform();
-        V8::InitializePlatform(v8_platform.get());
-        V8::Initialize();
+        static std::once_flag flag;
+        static std::unique_ptr<Platform> v8_platform;
+        std::call_once(flag, [] {
+            V8::InitializeICU();
+            V8::InitializeExternalStartupData(nullptr);
+            v8_platform = platform::NewDefaultPlatform();
+            V8::InitializePlatform(v8_platform.get());
+            V8::Initialize();
+        });
 
         /// Create isolate.
         Isolate::CreateParams create_params;
