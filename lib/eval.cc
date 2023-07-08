@@ -604,14 +604,8 @@ struct eval_impl {
         auto I = info.GetIsolate();
         for (int i = 0, end = info.Length(); i < end; i++) {
             auto value = info[i];
-            if (value->IsString()) {
-                String::Utf8Value utf8{I, value};
-                fmt::print("{}\n", *utf8);
-            } else {
-                auto json = JSON::Stringify(I->GetCurrentContext(), value);
-                String::Utf8Value utf8{I, json.ToLocalChecked()};
-                fmt::print("{}\n", *utf8);
-            }
+            String::Utf8Value utf8{I, value};
+            fmt::print("{}\n", std::string_view{*utf8, size_t(utf8.length())});
         }
         return {};
     }
