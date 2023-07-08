@@ -785,12 +785,27 @@ auto nhtml::detail::parser::parse_attribute_list(element::attribute_list& attrs)
         advance();
         std::string value;
         if (at(tk::eq)) {
-            /// Read the value. An attribute value is everything up to the next comma or closing bracket.
-            /// This means that we need to lex manually, for which reason we don’t advance() past the `=`,
-            /// since the parser is currently at the first character after the `=`.
-            auto s = read_until_chars(',', ']');
-            if (not s) return err{std::move(s.error())};
-            value = std::move(*s);
+            /// Read the value. An attribute value is everything up to the next
+            /// comma or closing bracket. This means that we need to lex manually,
+            /// for which reason we don’t advance() past the `=`, since the parser
+            /// is currently at the first character after the `=`.
+            ///
+            /// If the attribute value is supposed to contain a comma or ']', it
+            /// must be enclosed in quotes, so handle that case as well.
+            if (auto delim = lastc; lastc == '\'' or lastc == '\"') {
+                next_char();
+                auto s = read_until_chars(delim);
+                if (not s) return err{std::move(s.error())};
+                value = std::move(*s);
+                if (at(tk::name)) advance();
+            }
+
+            /// Unquoted value.
+            else {
+                auto s = read_until_chars(',', ']');
+                if (not s) return err{std::move(s.error())};
+                value = std::move(*s);
+            }
         }
 
         /// Add the attribute.

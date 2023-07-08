@@ -37,7 +37,7 @@
 #define NHTML_UNREACHABLE() ::nhtml::detail::assert_fail("Unreachable", __LINE__, NHTML_FILENAME())
 #define NHTML_ASSERT(X, ...)                                                                                           \
     do {                                                                                                               \
-        if (not x) ::nhtml::detail::assert_fail(NHTML_STR(X), __LINE__, NHTML_FILENAME(), __VA_OPT__(, ) __VA_ARGS__); \
+        if (not X) ::nhtml::detail::assert_fail(NHTML_STR(X), __LINE__, NHTML_FILENAME() __VA_OPT__(, ) __VA_ARGS__); \
     } while (0)
 
 namespace nhtml {
