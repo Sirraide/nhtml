@@ -21,11 +21,11 @@ endif()
 ## ============================================================================
 ##  Compiler options.
 ## ============================================================================
-add_library(options INTERFACE)
+add_library(_nhtml_options INTERFACE)
 
 ## Flags for Clang and GCC.
 if (CMAKE_CXX_COMPILER_ID STREQUAL "GNU" OR CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
-    target_compile_options(options INTERFACE
+    target_compile_options(_nhtml_options INTERFACE
         ## Warnings.
         -Wall -Wextra     # Enable ‘all’ warnings.
         -Wundef           # Invalid #undef or undefined macro in #if.
@@ -76,12 +76,12 @@ endif()
 
 ## Additional flags for Clang.
 if (CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
-    target_compile_options(options INTERFACE -Werror=dangling )
+    target_compile_options(_nhtml_options INTERFACE -Werror=dangling )
 endif()
 
 ## Flags for MSVC.
 if (CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
-    target_compile_options(options INTERFACE
+    target_compile_options(_nhtml_options INTERFACE
         /W4 # Enable ‘all’ warnings.
 
         # Allow unnamed structs/unions.
@@ -99,15 +99,15 @@ if (WIN32)
 endif()
 
 ## Debug/Release flags.
-target_compile_options(options INTERFACE
+target_compile_options(_nhtml_options INTERFACE
     $<$<CONFIG:DEBUG>:-O0 -g3 -ggdb3 -rdynamic>
     $<$<CONFIG:RELEASE>:-O3 -march=native>
 )
-target_link_options(options INTERFACE
+target_link_options(_nhtml_options INTERFACE
     $<$<CONFIG:DEBUG>:-O0 -g3 -ggdb3 -rdynamic>
     $<$<CONFIG:RELEASE>:-O3 -march=native>
 )
-target_compile_definitions(options INTERFACE
+target_compile_definitions(_nhtml_options INTERFACE
     $<$<CONFIG:DEBUG>:_GLIBCXX_DEBUG=1>
 )
 
@@ -115,14 +115,14 @@ target_compile_definitions(options INTERFACE
 ##  Submodules and include dirs.
 ## ============================================================================
 ## Link against libfmt.
-target_link_libraries(options INTERFACE fmt)
+target_link_libraries(_nhtml_options INTERFACE fmt)
 
 ## ‘src’ should be an include directory.
-target_include_directories(options INTERFACE src)
+target_include_directories(_nhtml_options INTERFACE src)
 
 ## ‘include’ too, if it exists.
 if (EXISTS ${PROJECT_SOURCE_DIR}/include)
-    target_include_directories(options INTERFACE include)
+    target_include_directories(_nhtml_options INTERFACE include)
 endif()
 
 ## As well as everything in ‘libs’.
@@ -133,9 +133,9 @@ if (EXISTS ${PROJECT_SOURCE_DIR}/libs)
     ## directory if there is no include directory.
     foreach(lib ${libs})
         if (IS_DIRECTORY ${lib}/include)
-            target_include_directories(options INTERFACE ${lib}/include)
+            target_include_directories(_nhtml_options INTERFACE ${lib}/include)
         else()
-            target_include_directories(options INTERFACE ${lib})
+            target_include_directories(_nhtml_options INTERFACE ${lib})
         endif()
     endforeach()
 
@@ -148,14 +148,14 @@ if (EXISTS ${PROJECT_SOURCE_DIR}/libs)
 endif()
 
 if (DEFINED CLOPTS_INCLUDE_DIR)
-    target_include_directories(options INTERFACE "${CLOPTS_INCLUDE_DIR}")
+    target_include_directories(_nhtml_options INTERFACE "${CLOPTS_INCLUDE_DIR}")
 endif()
 
 ## ============================================================================
 ##  V8.
 ## ============================================================================
 if (NOT NHTML_DISABLE_EVAL)
-    target_link_libraries(options INTERFACE v8)
+    target_link_libraries(_nhtml_options INTERFACE v8)
 else()
     add_definitions(-DNHTML_DISABLE_EVAL)
 endif()
@@ -185,13 +185,13 @@ endif()
 
 ## Apply our options.
 target_include_directories(nhtml PUBLIC "${PROJECT_SOURCE_DIR}/include")
-target_link_libraries(nhtml PRIVATE options)
+target_link_libraries(nhtml PRIVATE _nhtml_options)
 
 if (NHTML_BUILD_NHTMLC)
-    target_link_libraries(nhtmlc PRIVATE options nhtml)
+    target_link_libraries(nhtmlc PRIVATE _nhtml_options nhtml)
 endif()
 
 if (UNIX AND NHTML_BUILD_TESTS)
     target_compile_definitions(run-tests PRIVATE "__NHTML_DIR__=${PROJECT_SOURCE_DIR}")
-    target_link_libraries(run-tests PRIVATE options nhtml)
+    target_link_libraries(run-tests PRIVATE _nhtml_options nhtml)
 endif()
