@@ -186,8 +186,8 @@ struct html_writer {
         if (el.tag_name == "style") {
             indent(i);
             write("<style>\n");
-            auto& txt = std::get<std::string>(el.content);
-            write("{}\n", txt);
+            indent(i + 1);
+            write("{}\n", trim(auto{std::get<std::string>(el.content)}));
             indent(i);
             write("</style>\n");
             return;

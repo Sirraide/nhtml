@@ -1,10 +1,19 @@
 <document> ::= { <element> }
-<element>  ::= <element-named> | <element-text> | <element-implicit-div> | <style-tag> | <eval-tag>
+
+<element>  ::= <element-named>
+             | <element-text>
+             | <element-implicit-div>
+             | <style-tag>
+             | <eval-tag>
+             | <include-directive>
+
 <element-named> ::= NAME <element-named-rest>
 <element-implicit-div> ::= ( <element-data> ) <element-named-rest>
 <element-named-rest> ::= { <element-data> } [ <content> ]
 <style-tag> ::= "style" <css-data>
-<eval-tag> ::= "eval" "{" TEXT "}"
+<eval-tag> ::= ( "eval" | "eval!" ) "{" TEXT "}"
+<include-directive> ::= "include" "(" TOKENS ")"
+
 <element-data> ::= <attr-list> | <inline-style> | CLASS | ID
 <attr-list> ::= "[" { <attr> [ "," ] } "]"
 <inline-style> ::= "%" <css-data>

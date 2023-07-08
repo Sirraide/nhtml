@@ -60,10 +60,15 @@ auto nhtml::detail::parser::next() -> res<void> {
     /// Skip whitespace.
     skip_whitespace();
 
-    /// Keep returning EOF if we're at EOF.
+    /// Keep returning EOF if we're at EOF. We need to try
+    /// reading a character at least once because that might
+    /// cause us to start or continue lexing a different file.
     if (lastc == 0) {
-        tok.type = tk::eof;
-        return {};
+        next_char();
+        if (lastc == 0) {
+            tok.type = tk::eof;
+            return {};
+        }
     }
 
     /// Reset the token. We set the token type to 'invalid' here so that,
@@ -179,9 +184,13 @@ auto nhtml::detail::parser::next() -> res<void> {
 }
 
 void nhtml::detail::parser::next_char() {
-    if (curr() == end()) {
-        lastc = 0;
-        return;
+    while (curr() == end()) {
+        if (file_stack.size() == 1) {
+            lastc = 0;
+            return;
+        } else {
+            file_stack.pop_back();
+        }
     }
 
     lastc = *file_stack.back()->curr++;
@@ -366,6 +375,14 @@ auto nhtml::detail::parser::lex_string(char delim) -> res<void> {
     return {};
 }
 
+/// Read until one of the given characters is encountered.
+///
+/// This also reads the next token starting with the first
+/// delimiter encountered.
+///
+/// \param c The characters to read until.
+/// \return The text from the current character up to (but excluding) the first
+///         character in `c`, or an error if there was a problem.
 auto nhtml::detail::parser::read_until_chars(std::same_as<char> auto... c) -> res<std::string>
 requires (sizeof...(c) >= 1) {
     std::string s;
@@ -397,7 +414,7 @@ requires (sizeof...(c) >= 1) {
     }
 
     /// Get the next token.
-    NHTML_CHECK(next());
+    check(next());
 
     /// Return lexed text.
     return s;
@@ -498,8 +515,16 @@ auto nhtml::detail::parser::parse(file&& f) -> res<document> {
 }
 
 /// Parse an element.
-/// <element> ::= <element-named> | <element-text> | <element-implicit-div> | <style-tag>
+///
+/// <element>  ::= <element-named>
+///             | <element-text>
+///             | <element-implicit-div>
+///             | <style-tag>
+///             | <eval-tag>
+///             | <include-directive>
 /// <style-tag> ::= "style" <css-data>
+/// <eval-tag> ::= ( "eval" | "eval!" ) "{" TEXT "}"
+/// <include-directive> ::= "include" "(" TOKENS ")"
 auto nhtml::detail::parser::parse_element() -> res<element::ptr> {
     auto l = tok.location;
     switch (tok.type) {
@@ -536,6 +561,34 @@ auto nhtml::detail::parser::parse_element() -> res<element::ptr> {
                 return {};
             }
 #endif
+
+            /// Include directive.
+            if (name == "include") {
+                if (not at(tk::lparen)) return mkerr("Expected '(' after 'include'.");
+                auto file_path = read_until_chars(')');
+                if (not file_path) return err{file_path.error()};
+
+                /// The include path is the current file’s parent directory,
+                /// if it exists, and the current working directory otherwise.
+                std::error_code ec;
+                fs::path base_path = fs::canonical(file_stack.back()->parent_directory, ec);
+                if (ec or not fs::exists(base_path)) base_path = fs::current_path(ec);
+                if (ec) return mkerr("Failed to get current working directory: {}", ec.message());
+
+                /// Resolve the path.
+                fs::path path = fs::canonical(base_path / *file_path, ec);
+                if (ec) return mkerr("Failed to resolve path '{}': {}", *file_path, ec.message());
+
+                /// Read and add the file.
+                auto f = file::map(std::move(path));
+                if (not f) return err{f.error()};
+                check(add_file(std::move(*f)));
+
+                /// Yeet closing paren.
+                if (not at(tk::rparen)) return mkerr("Expected ')' after 'include' file path.");
+                advance();
+                return {};
+            }
 
             /// Regular element.
             return parse_named_element(std::move(name), l);
