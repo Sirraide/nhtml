@@ -193,6 +193,12 @@ struct html_writer {
             return;
         }
 
+        /// Raw HTML.
+        if (el.tag_name == "__html__") {
+            write("{}\n", trim(auto{std::get<std::string>(el.content)}), i, 0, false);
+            return;
+        }
+
         /// Check for XML elements.
         tempset in_xml = in_xml or el.tag_name == "svg";
 

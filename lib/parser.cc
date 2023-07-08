@@ -517,9 +517,11 @@ auto nhtml::detail::parser::parse(file&& f) -> res<document> {
 ///             | <style-tag>
 ///             | <eval-tag>
 ///             | <include-directive>
+///             | <raw-html>
 /// <style-tag> ::= "style" <css-data>
 /// <eval-tag> ::= ( "eval" | "eval!" ) "{" TEXT "}"
 /// <include-directive> ::= "include" "(" TOKENS ")"
+/// <raw-html> ::= "__html__" "{" TOKENS "}"
 auto nhtml::detail::parser::parse_element() -> res<element::ptr> {
     auto l = tok.location;
     switch (tok.type) {
@@ -583,6 +585,18 @@ auto nhtml::detail::parser::parse_element() -> res<element::ptr> {
                 if (not at(tk::rparen)) return mkerr("Expected ')' after 'include' file path.");
                 advance();
                 return {};
+            }
+
+            /// Raw HTML.
+            if (name == "__html__") {
+                if (not at(tk::lbrace)) return mkerr("Expected '{{' after '__html__'.");
+                auto html = read_until_chars('}');
+                if (not at(tk::rbrace)) return mkerr("Expected '}}' after raw HTML.");
+                advance();
+
+                auto el = element::make("__html__");
+                el->content = std::move(*html);
+                return el;
             }
 
             /// Regular element.

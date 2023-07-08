@@ -6,6 +6,7 @@
              | <style-tag>
              | <eval-tag>
              | <include-directive>
+             | <raw-html>
 
 <element-named> ::= NAME <element-named-rest>
 <element-implicit-div> ::= ( <element-data> ) <element-named-rest>
@@ -13,6 +14,7 @@
 <style-tag> ::= "style" <css-data>
 <eval-tag> ::= ( "eval" | "eval!" ) "{" TEXT "}"
 <include-directive> ::= "include" "(" TOKENS ")"
+<raw-html> ::= "__html__" "{" TOKENS "}"
 
 <element-data> ::= <attr-list> | <inline-style> | CLASS | ID
 <attr-list> ::= "[" { <attr> [ "," ] } "]"
