@@ -137,6 +137,10 @@ struct document {
 
     /// Create a new document.
     explicit document() = default;
+    document(const document&) = delete;
+    document(document&&) = default;
+    document& operator=(const document&) = delete;
+    document& operator=(document&&) = default;
 
     /// Write the document to a file.
     ///
