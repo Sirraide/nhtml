@@ -169,6 +169,7 @@ struct eval_impl {
     struct $element : object<element, &eval::element_tmpl> {
         static void register_interface(Isolate* I, Local<ObjectTemplate> inst, Local<ObjectTemplate> proto) {
             inst->SetAccessor(S(I, "attributes"), get_attributes, set_attributes);
+            inst->SetAccessor(S(I, "text"), get_text, set_text);
             inst->SetAccessor(S(I, "children"), get_children);
             inst->SetAccessor(S(I, "id"), get_id, set_id);
             proto->Set(S(I, "toString"), FunctionTemplate::New(I, to_string));
@@ -187,6 +188,18 @@ struct eval_impl {
             auto I = info.GetIsolate();
             HandleScope hs{I};
             info.GetReturnValue().Set(S(I, stringify(handle(info))));
+        }
+
+        /// Get text content of an element.
+        static void get_text(Local<String>, const PropertyCallbackInfo<Value>& info) {
+            auto I = info.GetIsolate();
+            HandleScope hs{I};
+
+            /// Create wrapper.
+            auto h = handle(info);
+            auto text = std::get_if<std::string>(&h->content);
+            if (text) info.GetReturnValue().Set(S(I, *text));
+            else info.GetReturnValue().SetUndefined();
         }
 
         /// Get attributes of an element.
@@ -216,6 +229,26 @@ struct eval_impl {
             auto I = info.GetIsolate();
             HandleScope hs{I};
             info.GetReturnValue().Set(S(I, handle(info)->id));
+        }
+
+        /// Set text content of an element.
+        static void set_text(
+            Local<String>,
+            Local<Value> new_text,
+            const PropertyCallbackInfo<void>& info
+        ) {
+            auto I = info.GetIsolate();
+            HandleScope hs{I};
+
+            /// Value must be a string.
+            if (not new_text->IsString()) {
+                I->ThrowError("text must be a string");
+                return;
+            }
+
+            /// Set text.
+            auto e = handle(info);
+            e->content = std::string{*String::Utf8Value{I, new_text}};
         }
 
         /// Set attributes of an element.

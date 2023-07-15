@@ -1,0 +1,5 @@
+title
+p
+
+eval { $('title').text = 'foobarbaz' }
+eval { $('p').text = $('title').text }
