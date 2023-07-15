@@ -27,6 +27,7 @@ enum struct tk {
 
     eq,
     comma,
+    right_angle,
 };
 
 /// A token.
@@ -63,6 +64,7 @@ constexpr auto tk_to_str(tk t) -> std::string_view {
         case tk::percent: return "%";
         case tk::eq: return "=";
         case tk::comma: return ",";
+        case tk::right_angle: return ">";
     }
     return "<unknown>";
 }

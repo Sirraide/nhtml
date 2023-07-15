@@ -145,6 +145,12 @@ auto nhtml::detail::parser::next() -> res<void> {
             tok.type = tk::comma;
             break;
 
+        /// Child combinator.
+        case '>':
+            next_char();
+            tok.type = tk::right_angle;
+            break;
+
         default:
         default_case:
             read_name();
@@ -733,7 +739,7 @@ auto nhtml::detail::parser::parse_element() -> res<element::ptr> {
 /// <element-data> ::= <attr-list> | <inline-style> | CLASS | ID
 /// <element-text>  ::= [ TEXT ] <text-body>
 /// <inline-style> ::= "%" <css-data>
-/// <content>  ::= "{" { <element> } "}" | <text-body>
+/// <content>  ::= "{" { <element> } "}" | <text-body> | ">" <element>
 auto nhtml::detail::parser::parse_named_element(
     std::string name,
     loc l,
@@ -827,6 +833,18 @@ auto nhtml::detail::parser::parse_named_element(
         auto text = parse_text_elem();
         if (not text) return err{std::move(text.error())};
         return make(std::move(name), std::move(*text));
+    }
+
+    /// Element contains exactly one child element.
+    if (at(tk::right_angle)) {
+        /// Yeet ">".
+        advance();
+
+        /// Parse the element.
+        auto e = parse_element();
+        if (not e) return err{std::move(e.error())};
+        if (not e.value() or not e.value().get()) return make(std::move(name));
+        return make(std::move(name), std::move(*e));
     }
 
     /// Element is empty.
