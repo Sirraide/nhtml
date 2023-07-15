@@ -32,7 +32,7 @@ struct file {
     const char* curr{};
     const char* end{};
 
-    static auto map(fs::path filename) -> std::expected<file, std::string> {
+    static auto map(fs::path filename) -> res<file> {
         file f;
 
         /// Open.

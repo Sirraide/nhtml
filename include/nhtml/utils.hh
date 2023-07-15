@@ -62,8 +62,8 @@ using namespace std::literals;
 
 namespace detail {
 /// Wrapper around is_same_v.
-template <typename T, typename U>
-concept is = std::is_same_v<std::remove_cvref_t<T>, std::remove_cvref_t<U>>;
+template <typename T, typename ...U>
+concept is = std::is_same_v<std::remove_cvref_t<T>, std::remove_cvref_t<U>...>;
 
 /// Overload set.
 template <typename... Ts>
@@ -73,6 +73,9 @@ struct overloaded : Ts... {
 
 template <typename... Ts>
 overloaded(Ts...) -> overloaded<Ts...>;
+
+template <typename T>
+concept always_false = false;
 
 template <typename... arguments>
 [[noreturn]] void assert_fail(std::string_view cond, int line, std::string_view file, fmt::format_string<arguments...> fmt = "", arguments&&... args) {

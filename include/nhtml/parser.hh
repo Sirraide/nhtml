@@ -14,7 +14,7 @@ namespace nhtml {
 ///                  link paths. Defaults the parent directory of the filename if it is a valid
 ///                  path and the current working directory otherwise.
 /// \return The parsed document, or an error message.
-auto parse(detail::string_ref data, fs::path filename = "<input>") -> std::expected<document, std::string>;
+auto parse(detail::string_ref data, fs::path filename = "<input>") -> detail::res<document>;
 
 /// Parse an NHTML file.
 ///
@@ -22,7 +22,7 @@ auto parse(detail::string_ref data, fs::path filename = "<input>") -> std::expec
 /// \param directory The parent directory of the file. relative to which to resolve include and
 ///                  link paths. Defaults the parent directory of the filename if it is a valid
 ///                  path and the current working directory otherwise.
-auto parse_file(fs::path filename) -> std::expected<document, std::string>;
+auto parse_file(fs::path filename) -> detail::res<document>;
 } // namespace nhtml
 
 #endif // NHTML_PARSER_HH

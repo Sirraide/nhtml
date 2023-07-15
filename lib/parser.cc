@@ -995,13 +995,13 @@ auto nhtml::detail::parser::query_selector_impl(std::string_view selector, eleme
 /// ===========================================================================
 namespace {
 /// Parse a file.
-auto parse(file&& f) -> std::expected<nhtml::document, std::string> {
+auto parse(file&& f) -> res<nhtml::document> {
     parser p;
     return p.parse(std::move(f));
 }
 }
 
-auto nhtml::parse(detail::string_ref data, fs::path filename) -> std::expected<document, std::string> {
+auto nhtml::parse(detail::string_ref data, fs::path filename) -> res<document> {
     /// Create the file.
     detail::file f;
     f.contents = std::move(data);
@@ -1012,7 +1012,7 @@ auto nhtml::parse(detail::string_ref data, fs::path filename) -> std::expected<d
     return ::parse(std::move(f));
 }
 
-auto nhtml::parse_file(fs::path filename) -> std::expected<document, std::string> {
+auto nhtml::parse_file(fs::path filename) -> res<document> {
     auto f = detail::file::map(std::move(filename));
     if (not f) return std::unexpected{f.error()};
     return ::parse(std::move(f.value()));
