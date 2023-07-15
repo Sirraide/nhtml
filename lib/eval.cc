@@ -437,6 +437,28 @@ struct eval_impl {
         return r;
     }
 
+    /// Query selector all.
+    static Local<Value> $$$(const FunctionCallbackInfo<Value>& info) {
+        auto I = info.GetIsolate();
+
+        /// Invalid selector.
+        if (info.Length() < 1 or not info[0]->IsString()) return {};
+
+        /// Perform query.
+        auto this_ = context(I);
+        String::Utf8Value selector{I, info[0]};
+        auto res = this_->p.query_selector_all(std::string_view{*selector, size_t(selector.length())});
+
+        /// Create array.
+        auto arr = Array::New(I, int(res.size()));
+        for (u32 i = 0; i < res.size(); ++i) {
+            auto r = this_->element_tmpl(I);
+            r->SetInternalField(0, External::New(I, res[i]));
+            arr->Set(I->GetCurrentContext(), i, r).Check();
+        }
+        return arr;
+    }
+
     /// Create an element.
     ///
     /// function element(
@@ -696,6 +718,7 @@ struct eval_impl {
             /// Set globals.
             export_global<$print>(g_tm, "print");
             export_global<$$>(g_tm, "$");
+            export_global<$$$>(g_tm, "$$");
             export_global<$make_element>(g_tm, "element");
 
             /// Template for element wrapper objects.

@@ -1006,6 +1006,23 @@ auto nhtml::detail::parser::query_selector_impl(std::string_view selector, eleme
     return nullptr;
 }
 
+auto nhtml::detail::parser::query_selector_all(std::string_view selector) -> std::vector<element*> {
+    std::vector<element*> els;
+    for (auto& e : doc.elements) query_selector_all_impl(selector, e.get(), els);
+    return els;
+}
+
+void nhtml::detail::parser::query_selector_all_impl(
+    std::string_view selector,
+    element* root,
+    std::vector<element*>& els
+) {
+    if (selector_matches(selector, root)) els.push_back(root);
+    if (std::holds_alternative<element::vector>(root->content))
+        for (auto& c : std::get<element::vector>(root->content))
+            query_selector_all_impl(selector, c.get(), els);
+}
+
 /// ===========================================================================
 ///  API
 /// ===========================================================================
