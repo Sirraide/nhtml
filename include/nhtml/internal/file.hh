@@ -2,6 +2,7 @@
 #define NHTML_INTERNAL_FILE_HH
 
 #include <nhtml/core.hh>
+#include <nhtml/internal/token.hh>
 
 #ifdef __linux__
 #    include <fcntl.h>

@@ -29,30 +29,7 @@ auto nhtml::detail::parser::lastc_loc() const -> loc {
     return l;
 }
 
-auto nhtml::detail::parser::look_ahead(usz number_of_tokens) -> res<token*> {
-    /// If we don't have enough tokens, lex them.
-    if (lookahead_tokens.size() <= number_of_tokens) {
-        auto current_token = std::move(tok);
-        while (lookahead_tokens.size() < number_of_tokens) {
-            check(next());
-            lookahead_tokens.push_back(std::move(tok));
-            tok = {};
-        }
-        tok = std::move(current_token);
-    }
-
-    /// Return the token.
-    return &lookahead_tokens[number_of_tokens - 1];
-}
-
 auto nhtml::detail::parser::next() -> res<void> {
-    /// Pop lookahead tokens.
-    if (not lookahead_tokens.empty()) {
-        tok = std::move(lookahead_tokens.back());
-        lookahead_tokens.pop_back();
-        return {};
-    }
-
     /// Skip whitespace.
     skip_whitespace();
 
@@ -376,9 +353,11 @@ auto nhtml::detail::parser::lex_string(char delim) -> res<void> {
 /// This also reads the next token starting with the first
 /// delimiter encountered.
 ///
+/// \tparam read_next_token Whether to read the next token after the delimiter.
 /// \param c The characters to read until.
 /// \return The text from the current character up to (but excluding) the first
 ///         character in `c`, or an error if there was a problem.
+template <bool read_next_token>
 auto nhtml::detail::parser::read_until_chars(std::same_as<char> auto... c) -> res<std::string>
 requires (sizeof...(c) >= 1) {
     std::string s;
@@ -410,7 +389,7 @@ requires (sizeof...(c) >= 1) {
     }
 
     /// Get the next token.
-    check(next());
+    if constexpr (read_next_token) check(next());
 
     /// Return lexed text.
     return s;
@@ -578,8 +557,17 @@ auto nhtml::detail::parser::parse_element() -> res<element::ptr> {
             /// Include directive.
             if (name == "include") {
                 if (not at(tk::lparen)) return diag(diag_kind::error, l, "Expected '(' after 'include'.");
-                auto file_path = read_until_chars(')');
+                auto file_path = read_until_chars<false>(')');
                 if (not file_path) return err{file_path.error()};
+
+                /// Yeet the closing paren. We can’t call next() here since
+                /// we only want to start reading tokens from this file again
+                /// after we’re done reading the included file.
+                ///
+                /// This will always discard a closing paren since the call to
+                /// read_until_chars() above has already made sure that we are
+                /// at a closing paren.
+                next_char();
 
                 /// Check every directory in the include path.
                 fs::path resolved;
@@ -606,8 +594,7 @@ auto nhtml::detail::parser::parse_element() -> res<element::ptr> {
                 if (not f) return err{f.error()};
                 check(add_file(std::move(*f)));
 
-                /// Yeet closing paren.
-                if (not at(tk::rparen)) return diag(diag_kind::error, tok.location, "Expected ')' after 'include' file path.");
+                /// Get the first token of the new file.
                 advance();
                 return {};
             }
