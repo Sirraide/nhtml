@@ -63,6 +63,9 @@ struct loc {
         l.len = static_cast<u16>(l.len + amount);
         return l;
     }
+
+    /// Check if this source location is valid.
+    constexpr explicit operator bool() const { return len != 0; }
 };
 
 /// A decoded source location.

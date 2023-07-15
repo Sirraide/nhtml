@@ -1011,7 +1011,11 @@ namespace {
 auto parse(file&& f, parse_options options) -> res<document> {
     parser p;
 
-    p.include_dirs = std::move(options.include_directories);
+    p.include_dirs = options.include_directories;
+#ifndef NHTML_DISABLE_EVAL
+    if (auto res = p.eval(options.js_prelude, loc{}); not res)
+        return mkerr("Error in prelude: {}", res.error());
+#endif
 
     return p.parse(std::move(f));
 }

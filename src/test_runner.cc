@@ -21,6 +21,7 @@
 #include <thread>
 #include <valarray>
 #include <vector>
+#include <clopts.hh>
 
 #define STR_(x) #x
 #define STR(x) STR_(x)
@@ -356,7 +357,15 @@ void run_test(const fs::path& path, size_t id) {
     CATCH()
 }
 
-int main() {
+using namespace command_line_options;
+using options = clopts< // clang-format off
+    option<"--threads", "Number of threads to use", nhtml::i64>,
+    help<>
+>; // clang-format on
+
+int main(int argc, char **argv) {
+    options::parse(argc, argv);
+
     /// Make sure the test dir exists..
     if (not fs::exists(test_dir)) die("Test directory does not exist: '{}'", test_dir.string());
 
@@ -374,7 +383,8 @@ int main() {
     }
 
     /// Determine the number of threads to use.
-    thread_count = std::min<size_t>(std::thread::hardware_concurrency(), tests.size());
+    thread_count = (nhtml::usz) options::get_or<"--threads">(std::min<size_t>(std::thread::hardware_concurrency(), tests.size()));
+    thread_count = std::max<nhtml::usz>(thread_count, 1);
 
     /// Initialise the data.
     tests_run.resize(thread_count + 1);

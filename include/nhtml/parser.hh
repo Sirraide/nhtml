@@ -8,7 +8,13 @@
 namespace nhtml {
 /// Options passed to the parser.
 struct parse_options {
+    /// Directories to search for included files.
     std::span<std::string_view> include_directories{};
+
+#ifndef NHTML_DISABLE_EVAL
+    /// JS code to execute before parsing.
+    std::string js_prelude;
+#endif
 };
 
 /// Parse an NHTML string.

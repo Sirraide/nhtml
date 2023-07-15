@@ -784,22 +784,29 @@ nhtml::detail::eval_ctx::~eval_ctx() {
 
 auto nhtml::detail::eval_ctx::operator()(string_ref script_data, loc where) -> res<void> {
     auto I = impl->isolate;
-    auto l = impl->p.seek(where);
     Isolate::Scope is{I};
     HandleScope hs{I};
     TryCatch tc{I};
-    ScriptOrigin so{
-        I,
-        String::NewFromUtf8(I, impl->p.files[where.file].name.string().c_str()).ToLocalChecked(),
-        int(l.line - 1),
-        int(l.col),
-    };
+    ScriptOrigin so = [&] {
+        if (where) {
+            auto l = impl->p.seek(where);
+            return ScriptOrigin{
+                I,
+                String::NewFromUtf8(I, impl->p.files[where.file].name.string().c_str()).ToLocalChecked(),
+                int(l.line - 1),
+                int(l.col),
+            };
+        } else {
+            return ScriptOrigin{I, S(I, "<input>")};
+        }
+    }();
     Local<Context> ctx{Context::New(I, nullptr, impl->globl_tmpl.Get(I))};
     Context::Scope cs{ctx};
     Local<Script> script;
 
     /// Update globals.
-    ctx->Global()->Set(ctx, S(I, "filename"), S(I, impl->p.files[0].name.string())).Check();
+    if (not impl->p.files.empty())
+        ctx->Global()->Set(ctx, S(I, "filename"), S(I, impl->p.files[0].name.string())).Check();
 
     /// Compile script.
     auto text = String::NewFromUtf8(I, script_data.data(), NewStringType::kNormal, int(script_data.size())).ToLocalChecked();
