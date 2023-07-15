@@ -14,6 +14,10 @@ mkdir -p out
 cmake -B out
 cmake --build out
 ```
+
+Note: If you’re planning to embed this in another project that uses UBSAN, make sure to specify `-fno-sanitize=vptr`,
+as otherwise, V8 will end up reporting a bunch of (from what I can tell bogus) errors.
+
 ## NHTML Library
 To use the library, include `<nhtml/nhtml.hh>`. The `nhtml::document` class represents a single NHTML document. You can either
 create your own document and add elements to it (as well as to those elements), which you can create by calling `nhtml::element::make()`,
