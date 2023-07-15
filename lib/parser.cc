@@ -942,8 +942,7 @@ bool selector_matches(std::string_view sel, nhtml::element* e) {
                 auto part = selector_part(".[");
                 if (part != e->id) return false;
                 sel.remove_prefix(part.size());
-                break;
-            }
+            } break;
 
             /// Match class.
             case '.': {
@@ -951,8 +950,7 @@ bool selector_matches(std::string_view sel, nhtml::element* e) {
                 auto part = selector_part("#[");
                 if (nhtml::rgs::find(e->classes, part) == e->classes.end()) return false;
                 sel.remove_prefix(part.size());
-                break;
-            }
+            } break;
 
             /// Match attribute.
             case '[': {
@@ -961,12 +959,18 @@ bool selector_matches(std::string_view sel, nhtml::element* e) {
                 const auto it = e->attributes.find(std::string{name});
                 if (it == e->attributes.end()) return false;
 
-                /// Ignore everything up to ']'
-                auto end = selector_part("]");
-                sel.remove_prefix(end.size());
-                if (sel[0] == ']') sel.remove_prefix(1);
-                break;
-            }
+                /// Match attribute value.
+                sel.remove_prefix(name.size());
+                if (sel.starts_with('=')) {
+                    sel.remove_prefix(1);
+                    auto value = selector_part("]");
+                    if (value != it->second) return false;
+                    sel.remove_prefix(value.size());
+                }
+
+                /// Remove ']'.
+                if (sel.starts_with(']')) sel.remove_prefix(1);
+            } break;
 
             /// Match tag. This is only allowed at the beginning of the selector.
             default: {
@@ -975,8 +979,7 @@ bool selector_matches(std::string_view sel, nhtml::element* e) {
                 auto tag_name = selector_part(".#[");
                 if (tag_name != e->tag_name) return false;
                 sel.remove_prefix(tag_name.size());
-                break;
-            }
+            } break;
         }
     }
 

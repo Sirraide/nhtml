@@ -1,0 +1,6 @@
+p[foo=bar]
+p[foo=baz]
+
+eval {
+    $('[foo=baz]').text = 'baz';
+}
