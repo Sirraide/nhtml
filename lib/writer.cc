@@ -185,11 +185,15 @@ struct html_writer {
         /// Style tag.
         if (el.tag_name == "style") {
             indent(i);
-            write("<style>\n");
-            indent(i + 1);
-            write("{}\n", trim(auto{std::get<std::string>(el.content)}));
-            indent(i);
-            write("</style>\n");
+            if (std::holds_alternative<std::string>(el.content)) {
+                write("<style>\n");
+                indent(i + 1);
+                write("{}\n", trim(auto{std::get<std::string>(el.content)}));
+                indent(i);
+                write("</style>\n");
+            } else {
+                write("<style></style>");
+            }
             return;
         }
 
