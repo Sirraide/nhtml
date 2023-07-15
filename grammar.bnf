@@ -1,4 +1,5 @@
-<document> ::= { <element> }
+<document> ::= [ <template-directive> ] { <element> }
+<template-directive> ::= "template!" <include-name>
 
 <element>  ::= <element-named>
              | <element-text>
@@ -6,6 +7,7 @@
              | <style-tag>
              | <eval-tag>
              | <include-directive>
+             | <content-directive>
              | <raw-html>
 
 <element-named> ::= NAME <element-named-rest>
@@ -13,8 +15,10 @@
 <element-named-rest> ::= { <element-data> } [ <content> ]
 <style-tag> ::= "style" <css-data>
 <eval-tag> ::= ( "eval" | "eval!" ) "{" TEXT "}"
-<include-directive> ::= "include" ( "(" TOKENS ")" | NAME )
+<include-directive> ::= "include" <include-name>
 <raw-html> ::= "__html__" "{" TOKENS "}"
+<include-name> ::= ( "(" TOKENS ")" | NAME )
+<content-directive> ::= "content!"
 
 <element-data> ::= <attr-list> | <inline-style> | CLASS | ID
 <attr-list> ::= "[" { <attr> [ "," ] } "]"

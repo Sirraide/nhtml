@@ -462,25 +462,76 @@ auto nhtml::detail::parser::add_file(file&& f) -> res<void> {
     return {};
 }
 
-/// Parse the input.
-/// <document> ::= { <element> }
-auto nhtml::detail::parser::parse(file&& f) -> res<document> {
-    /// Add the file.
-    check(add_file(std::move(f)));
-
-    /// Read the first token.
-    next_char();
-    check(next());
-
+/// Parse until the file stack is empty.
+auto parser::parse_file_stack() -> res<void> {
     /// Parse the document.
     while (tok.type != tk::eof) {
         /// Parse an element.
         auto e = parse_element();
         if (not e) return err{e.error()};
         if (e.value() and e.value().get()) doc.elements.push_back(std::move(*e));
+        rgs::move(std::move(pending_elements), std::back_inserter(doc.elements));
+        pending_elements.clear();
+    }
+
+    /// Done!
+    return {};
+}
+
+/// Parse the input.
+/// <document> ::= [ <template-directive> ] { <element> }
+/// <template-directive> ::= "template!" <include-name>
+auto nhtml::detail::parser::parse(file&& f) -> res<document> {
+    /// Add the file.
+    check(add_file(std::move(f)));
+
+    /// Read the first token.
+    next_char();
+    advance();
+
+    /// Template path, if any.
+    fs::path template_path;
+
+    /// Parse template directive, if any.
+    if (tok.type == tk::name && tok.text == "template!") {
+        auto l = tok.location;
+        advance();
+
+        /// Parse include name.
+        auto file_path = parse_include_name(l, ".thtml");
+        if (not file_path) return err{file_path.error()};
+
+        /// Check every directory in the include path.
+        auto resolved = resolve_include_path(l, *file_path);
+        if (not resolved) return err{resolved.error()};
+        template_path = std::move(*resolved);
+        advance();
+    }
+
+    /// Parse the main document.
+    check(parse_file_stack());
+
+    /// If we have a template, include it and replace `content!` with
+    /// the contents of the actual file.
+    if (not template_path.empty()) {
+        contents_directive_material = std::move(doc.elements);
+
+        /// Parse the template.
+        processing_template = true;
+        auto template_file = file::map(template_path);
+        if (not template_file) return err{template_file.error()};
+        check(add_file(std::move(*template_file)));
+
+        /// Read the first token of the template.
+        next_char();
+        advance();
+
+        /// Parse the template.
+        check(parse_file_stack());
     }
 
 #ifndef NHTML_DISABLE_EVAL
+    /// Evaluate scripts.
     for (auto& [script, location] : scripts)
         if (auto res = eval(script, location); not res)
             return err{res.error()};
@@ -490,33 +541,76 @@ auto nhtml::detail::parser::parse(file&& f) -> res<document> {
     return std::move(doc);
 }
 
-/// Try to a file in the include path.
-namespace {
-auto resolve_include_path(parser& p, loc l, std::string_view file_path, std::string_view parent_dir) -> std::optional<fs::path> {
-    std::error_code ec;
-    fs::path base_path = fs::canonical(parent_dir, ec);
-    if (ec or not fs::exists(base_path) or ec) return std::nullopt;
+/// Parse an include name.
+///
+/// <include-name> ::= ( "(" TOKENS ")" | NAME )
+auto nhtml::detail::parser::parse_include_name(loc include_loc, std::string_view default_extension) -> res<std::string> {
+    /// If followed by '(', then everything up to the next ')' is
+    /// the filename, including the extension. If followed by a name
+    /// the name is the filename, and `.nhtml` is appended to it.
+    if (at(tk::name)) return tok.text + std::string{default_extension};
+    if (not at(tk::lparen)) return diag(diag_kind::error, include_loc, "Expected '(' after 'include'.");
+    auto fp = read_until_chars<false>(')');
+    if (not fp) return err{fp.error()};
 
-    /// Resolve the path.
-    fs::path path = fs::canonical(base_path / file_path, ec);
-    if (ec) return std::nullopt;
-    return path;
+    /// Yeet the closing paren. We can’t call next() here since
+    /// we only want to start reading tokens from this file again
+    /// after we’re done reading the included file.
+    ///
+    /// This will always discard a closing paren since the call to
+    /// read_until_chars() above has already made sure that we are
+    /// at a closing paren.
+    next_char();
+    return *fp;
 }
 
+auto parser::resolve_include_path(loc location, std::string_view file_path) -> res<fs::path> {
+    const auto resolve = [&](std::string_view parent_dir) -> std::optional<fs::path> {
+        std::error_code ec;
+        fs::path base_path = fs::canonical(parent_dir, ec);
+        if (ec or not fs::exists(base_path) or ec) return std::nullopt;
+
+        /// Resolve the path.
+        fs::path path = fs::canonical(base_path / file_path, ec);
+        if (ec) return std::nullopt;
+        return path;
+    };
+
+    fs::path resolved;
+    for (auto& dir : include_dirs) {
+        if (auto res = resolve(dir)) {
+            resolved = std::move(*res);
+            break;
+        }
+    }
+
+    /// Check the file’s parent directory and the current directory.
+    if (resolved.empty())
+        if (auto res = resolve(file_stack.back()->parent_directory.native()))
+            resolved = std::move(*res);
+    if (resolved.empty())
+        if (auto res = resolve(fs::current_path().native()))
+            resolved = std::move(*res);
+
+    /// Make sure we actually have a path.
+    if (resolved.empty()) return diag(diag_kind::error, location, "Could not resolve include path '{}'.", file_path);
+    return resolved;
 }
 
 /// Parse an element.
 ///
 /// <element>  ::= <element-named>
-///             | <element-text>
-///             | <element-implicit-div>
-///             | <style-tag>
-///             | <eval-tag>
-///             | <include-directive>
-///             | <raw-html>
+///              | <element-text>
+///              | <element-implicit-div>
+///              | <style-tag>
+///              | <eval-tag>
+///              | <include-directive>
+///              | <content-directive>
+///              | <raw-html>
 /// <style-tag> ::= "style" <css-data>
 /// <eval-tag> ::= ( "eval" | "eval!" ) "{" TEXT "}"
-/// <include-directive> ::= "include" ( "(" TOKENS ")" | NAME )
+/// <include-directive> ::= "include" <include-name>
+/// <content-directive> ::= "content!"
 /// <raw-html> ::= "__html__" "{" TOKENS "}"
 auto nhtml::detail::parser::parse_element() -> res<element::ptr> {
     auto l = tok.location;
@@ -557,54 +651,28 @@ auto nhtml::detail::parser::parse_element() -> res<element::ptr> {
 
             /// Include directive.
             if (name == "include") {
-                /// If followed by '(', then everything up to the next ')' is
-                /// the filename, including the extension. If followed by a name
-                /// the name is the filename, and `.nhtml` is appended to it.
-                std::string file_path;
-                if (at(tk::name)) file_path = tok.text + ".nhtml";
-                else {
-                    if (not at(tk::lparen)) return diag(diag_kind::error, l, "Expected '(' after 'include'.");
-                    auto fp = read_until_chars<false>(')');
-                    if (not fp) return err{fp.error()};
-                    file_path = std::move(*fp);
-
-                    /// Yeet the closing paren. We can’t call next() here since
-                    /// we only want to start reading tokens from this file again
-                    /// after we’re done reading the included file.
-                    ///
-                    /// This will always discard a closing paren since the call to
-                    /// read_until_chars() above has already made sure that we are
-                    /// at a closing paren.
-                    next_char();
-                }
+                auto file_path = parse_include_name(l);
+                if (not file_path) return err{file_path.error()};
 
                 /// Check every directory in the include path.
-                fs::path resolved;
-                for (auto& dir : include_dirs) {
-                    if (auto res = resolve_include_path(*this, l, file_path, dir)) {
-                        resolved = std::move(*res);
-                        break;
-                    }
-                }
-
-                /// Check the file’s parent directory and the current directory.
-                if (resolved.empty())
-                    if (auto res = resolve_include_path(*this, l, file_path, file_stack.back()->parent_directory.native()))
-                        resolved = std::move(*res);
-                if (resolved.empty())
-                    if (auto res = resolve_include_path(*this, l, file_path, fs::current_path().native()))
-                        resolved = std::move(*res);
-
-                /// Make sure we actually have a path.
-                if (resolved.empty()) return diag(diag_kind::error, l, "Could not resolve include path '{}'.", file_path);
+                auto resolved = resolve_include_path(l, *file_path);
+                if (not resolved) return err{resolved.error()};
 
                 /// Read and add the file.
-                auto f = file::map(std::move(resolved));
+                auto f = file::map(std::move(*resolved));
                 if (not f) return err{f.error()};
                 check(add_file(std::move(*f)));
 
                 /// Get the first token of the new file.
                 advance();
+                return {};
+            }
+
+            /// Template content.
+            if (name == "content!") {
+                if (not processing_template) return diag(diag_kind::error, l, "content! directives are only allowed in templates.");
+                rgs::move(std::move(contents_directive_material), std::back_inserter(pending_elements));
+                contents_directive_material.clear();
                 return {};
             }
 
@@ -741,6 +809,8 @@ auto nhtml::detail::parser::parse_named_element(
             auto e = parse_element();
             if (not e) return err{e.error()};
             if (e.value() and e.value().get()) elements.push_back(std::move(*e));
+            rgs::move(std::move(pending_elements), std::back_inserter(elements));
+            pending_elements.clear();
         }
 
         /// Yeet "}".

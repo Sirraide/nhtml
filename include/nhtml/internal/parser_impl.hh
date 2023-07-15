@@ -67,6 +67,9 @@ struct parser {
     /// The last character lexed.
     char lastc = ' ';
 
+    /// Whether we’re processing a template file.
+    bool processing_template = false;
+
     /// Owned files.
     std::deque<file> files;
 
@@ -80,8 +83,14 @@ struct parser {
     /// the sole purpose of keeping the refcount of those elements at >= 1.
     std::vector<element::ptr> floating_elements;
 
+    /// Parsed elements that are waiting to be inserted.
+    std::vector<element::ptr> pending_elements;
+
     /// Parsed document.
     document doc;
+
+    /// For template insertion.
+    std::vector<element::ptr> contents_directive_material;
 
 #ifndef NHTML_DISABLE_EVAL
     /// Script evaluator.
@@ -229,14 +238,19 @@ struct parser {
         element::inline_style style = {}
     ) -> res<element::ptr>;
 
-    auto parse_text_elem() -> res<element::ptr>;
     auto parse_attribute_list(element::attribute_list& attrs) -> res<void>;
+    auto parse_file_stack() -> res<void>;
+    auto parse_include_name(loc include_loc, std::string_view default_extension = ".nhtml") -> res<std::string>;
+    auto parse_text_elem() -> res<element::ptr>;
 
     /// Select against a CSS selector.
     auto query_selector(std::string_view selector) -> element*;
     auto query_selector_impl(std::string_view selector, element* root) -> element*;
     auto query_selector_all(std::string_view selector) -> std::vector<element*>;
     void query_selector_all_impl(std::string_view selector, element* root, std::vector<element*>& els);
+
+    /// Path resolution.
+    auto resolve_include_path(loc location, std::string_view path) -> res<fs::path>;
 
     template <tk open = tk::lbrack, char open_char = '[', char close = ']', bool line_comments = false>
     auto parse_nested_language_data(std::string& style) -> res<void>;
