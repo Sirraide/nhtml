@@ -197,6 +197,12 @@ struct html_writer {
             return;
         }
 
+        /// !DOCTYPE token.
+        if (el.tag_name == "!doctype") {
+            write("<!DOCTYPE html>\n");
+            return;
+        }
+
         /// Raw HTML.
         if (el.tag_name == "__html__") {
             write("{}\n", trim(auto{std::get<std::string>(el.content)}), i, 0, false);
