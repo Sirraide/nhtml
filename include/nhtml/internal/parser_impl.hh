@@ -137,6 +137,9 @@ struct parser {
     /// File stack.
     std::vector<file*> file_stack;
 
+    /// Include directories.
+    std::vector<std::string> include_dirs;
+
     /// Elements that are ‘floating’, i.e. not inserted anywhere. This exists for
     /// the sole purpose of keeping the refcount of those elements at >= 1.
     std::vector<element::ptr> floating_elements;

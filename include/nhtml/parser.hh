@@ -6,23 +6,29 @@
 #include <nhtml/utils.hh>
 
 namespace nhtml {
+/// Options passed to the parser.
+struct parse_options {
+    std::vector<std::string> include_directories{};
+};
+
 /// Parse an NHTML string.
 ///
 /// \param data The data to parse.
 /// \param filename The filename to use for diagnostics.
-/// \param directory The parent directory of the file. relative to which to resolve include and
-///                  link paths. Defaults the parent directory of the filename if it is a valid
-///                  path and the current working directory otherwise.
+/// \param options Options to pass to the parser.
 /// \return The parsed document, or an error message.
-auto parse(detail::string_ref data, fs::path filename = "<input>") -> detail::res<document>;
+auto parse(
+    detail::string_ref data,
+    fs::path filename = "<input>",
+    parse_options options = {}
+) -> detail::res<document>;
 
 /// Parse an NHTML file.
 ///
 /// \param filename The file to parse.
-/// \param directory The parent directory of the file. relative to which to resolve include and
-///                  link paths. Defaults the parent directory of the filename if it is a valid
-///                  path and the current working directory otherwise.
-auto parse_file(fs::path filename) -> detail::res<document>;
+/// \param options Options to pass to the parser.
+/// \return The parsed document, or an error message.
+auto parse_file(fs::path filename, parse_options options = {}) -> detail::res<document>;
 } // namespace nhtml
 
 #endif // NHTML_PARSER_HH

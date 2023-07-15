@@ -6,6 +6,7 @@
 #include <unordered_map>
 #include <utility>
 
+using namespace nhtml;
 using namespace nhtml::detail;
 
 #define check NHTML_CHECK
@@ -509,6 +510,21 @@ auto nhtml::detail::parser::parse(file&& f) -> res<document> {
     return std::move(doc);
 }
 
+/// Try to a file in the include path.
+namespace {
+auto resolve_include_path(parser& p, loc l, const std::string& file_path, const std::string& parent_dir) -> std::optional<fs::path> {
+    std::error_code ec;
+    fs::path base_path = fs::canonical(parent_dir, ec);
+    if (ec or not fs::exists(base_path) or ec) return std::nullopt;
+
+    /// Resolve the path.
+    fs::path path = fs::canonical(base_path / file_path, ec);
+    if (ec) return std::nullopt;
+    return path;
+}
+
+}
+
 /// Parse an element.
 ///
 /// <element>  ::= <element-named>
@@ -565,19 +581,28 @@ auto nhtml::detail::parser::parse_element() -> res<element::ptr> {
                 auto file_path = read_until_chars(')');
                 if (not file_path) return err{file_path.error()};
 
-                /// The include path is the current file’s parent directory,
-                /// if it exists, and the current working directory otherwise.
-                std::error_code ec;
-                fs::path base_path = fs::canonical(file_stack.back()->parent_directory, ec);
-                if (ec or not fs::exists(base_path)) base_path = fs::current_path(ec);
-                if (ec) return diag(diag_kind::error, l, "Failed to get current working directory: {}", ec.message());
+                /// Check every directory in the include path.
+                fs::path resolved;
+                for (auto& dir : include_dirs) {
+                    if (auto res = resolve_include_path(*this, l, *file_path, dir)) {
+                        resolved = std::move(*res);
+                        break;
+                    }
+                }
 
-                /// Resolve the path.
-                fs::path path = fs::canonical(base_path / *file_path, ec);
-                if (ec) return diag(diag_kind::error, l, "Failed to resolve path '{}': {}", *file_path, ec.message());
+                /// Check the file’s parent directory and the current directory.
+                if (resolved.empty())
+                    if (auto res = resolve_include_path(*this, l, *file_path, file_stack.back()->parent_directory))
+                        resolved = std::move(*res);
+                if (resolved.empty())
+                    if (auto res = resolve_include_path(*this, l, *file_path, fs::current_path()))
+                        resolved = std::move(*res);
+
+                /// Make sure we actually have a path.
+                if (resolved.empty()) return diag(diag_kind::error, l, "Could not resolve include path '{}'.", *file_path);
 
                 /// Read and add the file.
-                auto f = file::map(std::move(path));
+                auto f = file::map(std::move(resolved));
                 if (not f) return err{f.error()};
                 check(add_file(std::move(*f)));
 
@@ -995,13 +1020,16 @@ auto nhtml::detail::parser::query_selector_impl(std::string_view selector, eleme
 /// ===========================================================================
 namespace {
 /// Parse a file.
-auto parse(file&& f) -> res<nhtml::document> {
+auto parse(file&& f, parse_options options) -> res<document> {
     parser p;
+
+    p.include_dirs = std::move(options.include_directories);
+
     return p.parse(std::move(f));
 }
 }
 
-auto nhtml::parse(detail::string_ref data, fs::path filename) -> res<document> {
+auto nhtml::parse(detail::string_ref data, fs::path filename, parse_options options) -> res<document> {
     /// Create the file.
     detail::file f;
     f.contents = std::move(data);
@@ -1009,11 +1037,11 @@ auto nhtml::parse(detail::string_ref data, fs::path filename) -> res<document> {
     f.name = std::move(filename);
 
     /// Parse it.
-    return ::parse(std::move(f));
+    return ::parse(std::move(f), std::move(options));
 }
 
-auto nhtml::parse_file(fs::path filename) -> res<document> {
+auto nhtml::parse_file(fs::path filename, parse_options options) -> res<document> {
     auto f = detail::file::map(std::move(filename));
     if (not f) return std::unexpected{f.error()};
-    return ::parse(std::move(f.value()));
+    return ::parse(std::move(f.value()), std::move(options));
 }
