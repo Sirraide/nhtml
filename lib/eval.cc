@@ -804,7 +804,7 @@ struct eval_impl {
         std::call_once(flag, [] {
             V8::InitializeICU();
             V8::InitializeExternalStartupData(nullptr);
-            v8_platform = platform::NewDefaultPlatform();
+            v8_platform = platform::NewSingleThreadedDefaultPlatform();
             V8::InitializePlatform(v8_platform.get());
             V8::Initialize();
         });
