@@ -107,9 +107,6 @@ target_link_options(_nhtml_options INTERFACE
     $<$<CONFIG:DEBUG>:-O0 -g3 -ggdb3 -rdynamic>
     $<$<CONFIG:RELEASE>:-O3 -march=native>
 )
-target_compile_definitions(_nhtml_options INTERFACE
-    $<$<CONFIG:DEBUG>:_GLIBCXX_DEBUG=1>
-)
 
 ## ============================================================================
 ##  Submodules and include dirs.
