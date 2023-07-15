@@ -275,7 +275,15 @@ struct html_writer {
         }, el.content); // clang-format on
 
         if (line != lines) indent(i);
-        write("</{}>", el.tag_name);
+
+        /// Some tags have no closing tag.
+        /// See: https://www.w3.org/TR/2011/WD-html-markup-20110113/syntax.html#void-element
+        static constexpr std::string_view void_elements[] {
+            "area", "base", "br", "col", "command", "embed", "hr", "img", "input", "keygen",
+            "link", "meta", "param", "source", "track", "wbr",
+        };
+
+        if (not rgs::contains(void_elements, el.tag_name)) write("</{}>", el.tag_name);
         nl();
     }
 
