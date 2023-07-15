@@ -8,7 +8,7 @@
 namespace nhtml {
 /// Options passed to the parser.
 struct parse_options {
-    std::vector<std::string> include_directories{};
+    std::span<std::string_view> include_directories{};
 };
 
 /// Parse an NHTML string.

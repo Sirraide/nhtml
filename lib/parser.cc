@@ -512,7 +512,7 @@ auto nhtml::detail::parser::parse(file&& f) -> res<document> {
 
 /// Try to a file in the include path.
 namespace {
-auto resolve_include_path(parser& p, loc l, const std::string& file_path, const std::string& parent_dir) -> std::optional<fs::path> {
+auto resolve_include_path(parser& p, loc l, std::string_view file_path, std::string_view parent_dir) -> std::optional<fs::path> {
     std::error_code ec;
     fs::path base_path = fs::canonical(parent_dir, ec);
     if (ec or not fs::exists(base_path) or ec) return std::nullopt;
@@ -592,10 +592,10 @@ auto nhtml::detail::parser::parse_element() -> res<element::ptr> {
 
                 /// Check the file’s parent directory and the current directory.
                 if (resolved.empty())
-                    if (auto res = resolve_include_path(*this, l, *file_path, file_stack.back()->parent_directory))
+                    if (auto res = resolve_include_path(*this, l, *file_path, file_stack.back()->parent_directory.native()))
                         resolved = std::move(*res);
                 if (resolved.empty())
-                    if (auto res = resolve_include_path(*this, l, *file_path, fs::current_path()))
+                    if (auto res = resolve_include_path(*this, l, *file_path, fs::current_path().native()))
                         resolved = std::move(*res);
 
                 /// Make sure we actually have a path.

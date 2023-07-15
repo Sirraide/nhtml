@@ -73,13 +73,17 @@ int main(int argc, char** argv) {
         return false;
     });
 
+    std::vector<std::string_view> include_dirs;
+    include_dirs.reserve(includes.size());
+    for (const auto& s : includes) include_dirs.push_back(s);
+
     /// Compiling a single file.
     if (options::get<"-c">()) {
         auto fname = options::get<"path">();
         auto doc = nhtml::parse_file(
             *fname,
             {
-                .include_directories = std::move(includes),
+                .include_directories = include_dirs,
             }
         );
 
