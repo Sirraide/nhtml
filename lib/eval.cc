@@ -42,7 +42,6 @@ struct function_template {
 
 struct eval_impl {
     using eval = eval_impl;
-    ArrayBuffer::Allocator* alloc;
     Isolate* isolate;
     parser& p;
     Persistent<ObjectTemplate> globl_tmpl;
@@ -627,7 +626,7 @@ struct eval_impl {
 
         /// Create isolate.
         Isolate::CreateParams create_params;
-        create_params.array_buffer_allocator = alloc = ArrayBuffer::Allocator::NewDefaultAllocator();
+        create_params.array_buffer_allocator_shared = std::shared_ptr<ArrayBuffer::Allocator>(ArrayBuffer::Allocator::NewDefaultAllocator());
         auto I = isolate = Isolate::New(create_params);
         I->SetData(0, this);
 
@@ -652,7 +651,6 @@ struct eval_impl {
     /// ===========================================================================
     ~eval_impl() {
         isolate->Dispose();
-        delete alloc;
     }
 
     /// Get the parser from the isolate.
