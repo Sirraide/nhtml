@@ -51,6 +51,30 @@ struct eval_impl {
     function_template attributes_it_tmpl;
     function_template children_it_tmpl;
 
+    /// Persistent scope for script evaluation.
+    struct eval_scope {
+        Isolate* I;
+        Isolate::Scope is;
+        HandleScope hs;
+        Local<Context> ctx;
+        Context::Scope cs;
+
+        eval_scope(eval_impl& impl)
+            : I{impl.isolate}
+            , is{I}
+            , hs{I}
+            , ctx{Context::New(I, nullptr, impl.globl_tmpl.Get(I))}
+            , cs{ctx} {}
+
+        eval_scope(const eval_scope&) = delete;
+        eval_scope(eval_scope&&) = delete;
+        auto operator=(const eval_scope&) -> eval_scope& = delete;
+        auto operator=(eval_scope&&) -> eval_scope& = delete;
+    };
+
+    /// Late initialisation.
+    alignas(eval_scope) std::byte eval_scope_storage[sizeof(eval_scope)];
+
     /// Helper to export a global function. Must not be called outside the constructor.
     template <auto cb>
     void export_global(Local<ObjectTemplate>& tm, auto&& name) {
@@ -631,30 +655,41 @@ struct eval_impl {
         I->SetData(0, this);
 
         /// Template for global object.
-        HandleScope hs{I};
-        auto g_tm = ObjectTemplate::New(I);
-        globl_tmpl.Reset(I, g_tm);
+        {
+            HandleScope hs{I};
+            auto g_tm = ObjectTemplate::New(I);
+            globl_tmpl.Reset(I, g_tm);
 
-        /// Set globals.
-        export_global<$print>(g_tm, "print");
-        export_global<$$>(g_tm, "$");
-        export_global<$make_element>(g_tm, "element");
+            /// Set globals.
+            export_global<$print>(g_tm, "print");
+            export_global<$$>(g_tm, "$");
+            export_global<$make_element>(g_tm, "element");
 
-        /// Template for element wrapper objects.
-        register_template<$element>();
-        register_template<$children>();
-        register_template<$attributes>();
+            /// Template for element wrapper objects.
+            register_template<$element>();
+            register_template<$children>();
+            register_template<$attributes>();
+        }
+
+        /// Create scopes for script execution.
+        ::new (eval_scope_storage) eval_scope{*this};
     }
 
     /// ===========================================================================
     ///  Various helpers.
     /// ===========================================================================
     ~eval_impl() {
+        reinterpret_cast<eval_scope*>(eval_scope_storage)->~eval_scope();
         isolate->Dispose();
     }
 
     /// Get the parser from the isolate.
     static auto context(Isolate* I) -> eval_impl* { return static_cast<eval_impl*>(I->GetData(0)); }
+
+    /// Get the V8 evaluation context.
+    auto v8_context() -> Local<Context> {
+        return reinterpret_cast<eval_scope*>(eval_scope_storage)->ctx;
+    }
 
     /// Create an object template.
     template <typename backing_type>
@@ -784,7 +819,6 @@ nhtml::detail::eval_ctx::~eval_ctx() {
 
 auto nhtml::detail::eval_ctx::operator()(string_ref script_data, loc where) -> res<void> {
     auto I = impl->isolate;
-    Isolate::Scope is{I};
     HandleScope hs{I};
     TryCatch tc{I};
     ScriptOrigin so = [&] {
@@ -793,27 +827,26 @@ auto nhtml::detail::eval_ctx::operator()(string_ref script_data, loc where) -> r
             return ScriptOrigin{
                 I,
                 String::NewFromUtf8(I, impl->p.files[where.file].name.string().c_str()).ToLocalChecked(),
-                int(l.line - 1),
+                int(l.line - 2), /// -2 because we insert an extra line and because our lines start at 1.
                 int(l.col),
             };
         } else {
             return ScriptOrigin{I, S(I, "<input>")};
         }
     }();
-    Local<Context> ctx{Context::New(I, nullptr, impl->globl_tmpl.Get(I))};
-    Context::Scope cs{ctx};
-    Local<Script> script;
 
     /// Update globals.
     if (not impl->p.files.empty())
-        ctx->Global()->Set(ctx, S(I, "filename"), S(I, impl->p.files[0].name.string())).Check();
+        impl->v8_context()->Global()->Set(impl->v8_context(), S(I, "filename"), S(I, impl->p.files[0].name.string())).Check();
 
     /// Compile script.
-    auto text = String::NewFromUtf8(I, script_data.data(), NewStringType::kNormal, int(script_data.size())).ToLocalChecked();
-    if (not Script::Compile(ctx, text, &so).ToLocal(&script)) return exception_to_diag(I, tc);
+    Local<Script> script;
+    std::string script_wrapped = fmt::format("function __nhtml_main__() {{\n{}\n}} __nhtml_main__()", script_data.sv());
+    auto text = String::NewFromUtf8(I, script_wrapped.c_str(), NewStringType::kNormal, int(script_wrapped.size())).ToLocalChecked();
+    if (not Script::Compile(impl->v8_context(), text, &so).ToLocal(&script)) return exception_to_diag(I, tc);
 
     /// Execute it.
-    if (Local<Value> res; not script->Run(ctx).ToLocal(&res)) return exception_to_diag(I, tc);
+    if (Local<Value> res; not script->Run(impl->v8_context()).ToLocal(&res)) return exception_to_diag(I, tc);
     return {};
 }
 
