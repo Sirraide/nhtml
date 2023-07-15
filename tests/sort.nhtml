@@ -1,0 +1,21 @@
+#children {
+    div (a)
+    div (c)
+    div (f)
+    div (b)
+}
+
+eval {
+    function lex_compare(a, b)  {
+        let sz = Math.min(a.length, b.length)
+        for (let i = 0; i < sz; ++i) {
+            if (a.charCodeAt(i) < b.charCodeAt(i)) return -1
+            if (a.charCodeAt(i) > b.charCodeAt(i)) return 1
+        }
+        return a.length - b.length
+    }
+
+    let chs = $('#children')
+    let divs = [...chs.children].sort((a, b) => lex_compare(a.text, b.text))
+    chs.children = divs
+}

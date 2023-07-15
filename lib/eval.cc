@@ -174,7 +174,7 @@ struct eval_impl {
         static void register_interface(Isolate* I, Local<ObjectTemplate> inst, Local<ObjectTemplate> proto) {
             inst->SetAccessor(S(I, "attributes"), get_attributes, set_attributes);
             inst->SetAccessor(S(I, "text"), get_text, set_text);
-            inst->SetAccessor(S(I, "children"), get_children);
+            inst->SetAccessor(S(I, "children"), get_children, set_children);
             inst->SetAccessor(S(I, "id"), get_id, set_id);
             inst->SetAccessor(S(I, "classes"), get_classes, set_classes);
             proto->Set(S(I, "toString"), FunctionTemplate::New(I, to_string));
@@ -321,6 +321,49 @@ struct eval_impl {
 
             /// Move class attribute to class list.
             handle_class_attribute(e);
+        }
+
+        /// Set the children of an element.
+        static void set_children(
+            Local<String>,
+            Local<Value> new_children,
+            const PropertyCallbackInfo<void>& info
+        ) {
+            auto I = info.GetIsolate();
+            HandleScope hs{I};
+
+            /// Value must be an array.
+            if (not new_children->IsArray()) {
+                I->ThrowError("children must be an array");
+                return;
+            }
+
+            /// Get data.
+            auto this_ = context(I);
+            auto e = handle(info);
+            auto arr = new_children->ToObject(I->GetCurrentContext()).ToLocalChecked();
+            auto ctx = I->GetCurrentContext();
+            auto length = arr.As<Array>()->Length();
+
+            /// Set children.
+            element::vector children;
+            for (u32 i = 0; i < length; i++) {
+                auto child = arr->Get(ctx, i).ToLocalChecked();
+                if (not this_->element_tmpl.is(I, child)) {
+                    I->ThrowError("children must be elements");
+                    return;
+                }
+
+                /// Add the child.
+                auto child_obj = child->ToObject(ctx).ToLocalChecked();
+                if (child_obj->InternalFieldCount() == 1) {
+                    auto child_e = static_cast<element*>(child_obj->GetInternalField(0).As<External>()->Value());
+                    children.emplace_back(child_e);
+                }
+            }
+
+            /// Set children.
+            e->content = std::move(children);
         }
 
         /// Set ID of an element.
