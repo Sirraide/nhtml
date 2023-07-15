@@ -50,6 +50,7 @@ auto nhtml::detail::parser::next() -> res<void> {
     /// it encounters an invalid token.
     tok.type = tk::invalid;
     tok.location.pos = static_cast<u32>(curr() - file_stack.back()->contents.data() - 1);
+    tok.location.file = file_stack.back()->file_index;
 
     /// Reads a name.
     auto read_name = [this] {
