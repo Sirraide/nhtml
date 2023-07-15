@@ -202,9 +202,24 @@ struct eval_impl {
 
             /// Create wrapper.
             auto h = handle(info);
+
+            /// Element contains string.
             auto text = std::get_if<std::string>(&h->content);
-            if (text) info.GetReturnValue().Set(S(I, *text));
-            else info.GetReturnValue().SetUndefined();
+            if (text) return info.GetReturnValue().Set(S(I, *text));
+
+            /// Element contains a single text element.
+            if (auto e = std::get_if<element::vector>(&h->content);
+                e and
+                e->size() == 1 and
+                e->front()->tag_name == "text"
+            ) {
+                info.GetReturnValue().Set(S(I, std::get<std::string>(e->front()->content)));
+                h->content = std::move(e->front()->content);
+                return;
+            }
+
+            /// Anything else doesn’t have text content.
+            info.GetReturnValue().SetUndefined();
         }
 
         /// Get attributes of an element.
