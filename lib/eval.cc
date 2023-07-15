@@ -869,8 +869,11 @@ auto nhtml::detail::eval_ctx::operator()(string_ref script_data, loc where) -> r
     }();
 
     /// Update globals.
-    if (not impl->p.files.empty())
-        impl->v8_context()->Global()->Set(impl->v8_context(), S(I, "filename"), S(I, impl->p.files[0].name.string())).Check();
+    impl->v8_context()->Global()->Set( // clang-format off
+        impl->v8_context(),
+        S(I, "__file__"),
+        S(I, not impl->p.files.empty() ? impl->p.files[0].name.filename().string() : "unknown_filename.nhtml")
+    ).Check(); // clang-format on
 
     /// Compile script.
     Local<Script> script;

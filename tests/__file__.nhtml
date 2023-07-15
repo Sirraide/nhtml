@@ -1,0 +1,3 @@
+h1
+
+eval { $('h1').text = __file__ }
