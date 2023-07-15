@@ -217,6 +217,11 @@ struct parser {
     /// Seek to a source location. The location must be valid.
     [[nodiscard]] auto seek(loc l) const -> loc_info;
 
+
+    /// Select against a CSS selector.
+    auto query_selector(std::string_view selector) -> element*;
+    auto query_selector_all(std::string_view selector) -> std::vector<element*>;
+
     /// =======================================================================
     ///  Parser Operations
     /// =======================================================================
@@ -243,11 +248,18 @@ struct parser {
     auto parse_include_name(loc include_loc, std::string_view default_extension = ".nhtml") -> res<std::string>;
     auto parse_text_elem() -> res<element::ptr>;
 
-    /// Select against a CSS selector.
-    auto query_selector(std::string_view selector) -> element*;
-    auto query_selector_impl(std::string_view selector, element* root) -> element*;
-    auto query_selector_all(std::string_view selector) -> std::vector<element*>;
-    void query_selector_all_impl(std::string_view selector, element* root, std::vector<element*>& els);
+    /// This implements query_selector and query_selector_all in
+    /// O(n * m) where n is the number of DOM elements and m the
+    /// number of nested selectors. This is basically just O(n)
+    /// since we’re unlikely to ever have more than 5-ish nested
+    /// selectors.
+    template <bool all>
+    void query_selector_impl(
+        std::string_view sel,
+        std::string_view original_selector,
+        nhtml::element* e,
+        std::conditional_t<all, std::vector<nhtml::element*>, nhtml::element*>& out
+    );
 
     /// Path resolution.
     auto resolve_include_path(loc location, std::string_view path) -> res<fs::path>;

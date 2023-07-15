@@ -1001,9 +1001,32 @@ done_parsing_css:
     return {};
 }
 
-namespace {
-bool selector_matches(std::string_view sel, nhtml::element* e) {
+template <bool all>
+void nhtml::detail::parser::query_selector_impl(
+    std::string_view sel,
+    std::string_view original_selector,
+    nhtml::element* e,
+    std::conditional_t<all, std::vector<element*>, element*>& out
+) {
+    /// Only allow matching a tag at the beginning of the selector. This
+    /// doesn’t mean we can’t have nested tags.
     bool tag_matched = false;
+
+    /// If this is has child elements, match the original selector. We need
+    /// to do this at the very end since this is supposed to be in document
+    /// order, i.e. a pre-order traversal.
+    defer {
+        if (auto children = std::get_if<element::vector>(&e->content)) {
+            for (auto& el : *children) {
+                query_selector_impl<all>(original_selector, original_selector, el.get(), out);
+                if constexpr (not all) {
+                    if (out) break;
+                }
+            }
+        }
+    };
+
+    /// Selector parse loop.
     while (not sel.empty()) {
         /// Extract part of a selector.
         const auto selector_part = [&](std::string_view seps) -> std::string_view {
@@ -1018,7 +1041,7 @@ bool selector_matches(std::string_view sel, nhtml::element* e) {
             case '#': {
                 sel.remove_prefix(1);
                 auto part = selector_part(".[");
-                if (part != e->id) return false;
+                if (part != e->id) return;
                 sel.remove_prefix(part.size());
             } break;
 
@@ -1026,7 +1049,7 @@ bool selector_matches(std::string_view sel, nhtml::element* e) {
             case '.': {
                 sel.remove_prefix(1);
                 auto part = selector_part("#[");
-                if (nhtml::rgs::find(e->classes, part) == e->classes.end()) return false;
+                if (rgs::find(e->classes, part) == e->classes.end()) return;
                 sel.remove_prefix(part.size());
             } break;
 
@@ -1035,14 +1058,14 @@ bool selector_matches(std::string_view sel, nhtml::element* e) {
                 sel.remove_prefix(1);
                 auto name = selector_part("=]");
                 const auto it = e->attributes.find(std::string{name});
-                if (it == e->attributes.end()) return false;
+                if (it == e->attributes.end()) return;
 
                 /// Match attribute value.
                 sel.remove_prefix(name.size());
                 if (sel.starts_with('=')) {
                     sel.remove_prefix(1);
                     auto value = selector_part("]");
-                    if (value != it->second) return false;
+                    if (value != it->second) return;
                     sel.remove_prefix(value.size());
                 }
 
@@ -1050,55 +1073,72 @@ bool selector_matches(std::string_view sel, nhtml::element* e) {
                 if (sel.starts_with(']')) sel.remove_prefix(1);
             } break;
 
+            /// Match nested selector.
+            case ' ':
+            case '\t':
+            case '\n':
+            case '\r': {
+                /// If the element doesn’t have children, then stop.
+                if (not std::holds_alternative<element::vector>(e->content)) return;
+
+                /// Skip whitespace.
+                while (not sel.empty() and std::isspace(sel[0])) sel.remove_prefix(1);
+
+                /// Match selector on each child.
+                for (auto& el : std::get<element::vector>(e->content)) {
+                    /// Because the DOM is a tree, this is the first time we
+                    /// encounter a non-top-level element, so we can reset
+                    /// this flag here.
+                    el->selected = false;
+
+                    /// Match the nested selector.
+                    query_selector_impl<all>(sel, original_selector, el.get(), out);
+                    if constexpr (not all) {
+                        if (out) return;
+                    }
+                }
+
+                /// Since there are nested selectors, the selector does not
+                /// match this element at this moment.
+                return;
+            }
+
             /// Match tag. This is only allowed at the beginning of the selector.
             default: {
-                if (tag_matched) return false;
+                if (tag_matched) return;
                 tag_matched = true;
-                auto tag_name = selector_part(".#[");
-                if (tag_name != e->tag_name) return false;
+                auto tag_name = selector_part(".#[ \t\n\r");
+                if (tag_name != e->tag_name) return;
                 sel.remove_prefix(tag_name.size());
             } break;
         }
     }
 
     /// If the selector is empty, we have a match.
-    return true;
+    if (not e->selected) {
+        e->selected = true;
+        if constexpr (all) out.push_back(e);
+        else out = e;
+    }
 };
-} // namespace
 
 auto nhtml::detail::parser::query_selector(std::string_view selector) -> element* {
-    for (auto& e : doc.elements)
-        if (auto res = query_selector_impl(selector, e.get()))
+    for (auto& e : doc.elements) {
+        e->selected = false;
+        if (element* res = nullptr; query_selector_impl<false>(selector, selector, e.get(), res), res)
             return res;
-
-    return nullptr;
-}
-
-auto nhtml::detail::parser::query_selector_impl(std::string_view selector, element* root) -> element* {
-    if (selector_matches(selector, root)) return root;
-    if (std::holds_alternative<element::vector>(root->content))
-        for (auto& c : std::get<element::vector>(root->content))
-            if (auto res = query_selector_impl(selector, c.get()))
-                return res;
+    }
 
     return nullptr;
 }
 
 auto nhtml::detail::parser::query_selector_all(std::string_view selector) -> std::vector<element*> {
     std::vector<element*> els;
-    for (auto& e : doc.elements) query_selector_all_impl(selector, e.get(), els);
+    for (auto& e : doc.elements) {
+        e->selected = false;
+        query_selector_impl<true>(selector, selector, e.get(), els);
+    }
     return els;
-}
-
-void nhtml::detail::parser::query_selector_all_impl(
-    std::string_view selector,
-    element* root,
-    std::vector<element*>& els
-) {
-    if (selector_matches(selector, root)) els.push_back(root);
-    if (std::holds_alternative<element::vector>(root->content))
-        for (auto& c : std::get<element::vector>(root->content))
-            query_selector_all_impl(selector, c.get(), els);
 }
 
 /// ===========================================================================
@@ -1117,7 +1157,7 @@ auto parse(file&& f, parse_options options) -> res<document> {
 
     return p.parse(std::move(f));
 }
-}
+} // namespace
 
 auto nhtml::parse(detail::string_ref data, fs::path filename, parse_options options) -> res<document> {
     /// Create the file.

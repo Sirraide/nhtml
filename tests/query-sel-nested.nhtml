@@ -1,0 +1,11 @@
+div {
+    .test
+    div {
+        .test
+    }
+}
+
+eval {
+    $('div div .test').id = 'foobar'
+    for (const el of $$('div .test')) el.classes += ' selected'
+}

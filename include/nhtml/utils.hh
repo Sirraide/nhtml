@@ -7,7 +7,10 @@
 #include <expected>
 #include <filesystem>
 #include <fmt/format.h>
+#include <functional>
+#include <numeric>
 #include <ranges>
+#include <regex>
 #include <string>
 #include <variant>
 #include <vector>
@@ -25,18 +28,18 @@
     } while (false)
 
 #define NHTML_STR_(X) #X
-#define NHTML_STR(X) NHTML_STR_(X)
+#define NHTML_STR(X)  NHTML_STR_(X)
 
 #define NHTML_CAT_(X, Y) X##Y
-#define NHTML_CAT(X, Y) NHTML_CAT_(X, Y)
+#define NHTML_CAT(X, Y)  NHTML_CAT_(X, Y)
 
-#define NHTML_REPEAT(n) NHTML_REPEAT_IMPL(n, NHTML_CAT(_nhtml_repeat_, __COUNTER__), NHTML_CAT(_nhtml_until_, __COUNTER__))
+#define NHTML_REPEAT(n)                    NHTML_REPEAT_IMPL(n, NHTML_CAT(_nhtml_repeat_, __COUNTER__), NHTML_CAT(_nhtml_until_, __COUNTER__))
 #define NHTML_REPEAT_IMPL(n, count, until) for (size_t count = 0, until = n; count < until; count++)
 
-#define NHTML_FILENAME() ::nhtml::detail::format_filename(__FILE__)
+#define NHTML_FILENAME()    ::nhtml::detail::format_filename(__FILE__)
 #define NHTML_UNREACHABLE() ::nhtml::detail::assert_fail("Unreachable", __LINE__, NHTML_FILENAME())
-#define NHTML_ASSERT(X, ...)                                                                                           \
-    do {                                                                                                               \
+#define NHTML_ASSERT(X, ...)                                                                                          \
+    do {                                                                                                              \
         if (not X) ::nhtml::detail::assert_fail(NHTML_STR(X), __LINE__, NHTML_FILENAME() __VA_OPT__(, ) __VA_ARGS__); \
     } while (0)
 
@@ -62,7 +65,7 @@ using namespace std::literals;
 
 namespace detail {
 /// Wrapper around is_same_v.
-template <typename T, typename ...U>
+template <typename T, typename... U>
 concept is = std::is_same_v<std::remove_cvref_t<T>, std::remove_cvref_t<U>...>;
 
 /// Overload set.
@@ -242,6 +245,13 @@ auto trim(is<std::string> auto&& s) -> decltype(s) {
     s.erase(s.begin(), std::find_if(s.begin(), s.end(), [](int ch) { return !std::isspace(ch); }));
     s.erase(std::find_if(s.rbegin(), s.rend(), [](int ch) { return !std::isspace(ch); }).base(), s.end());
     return std::forward<decltype(s)>(s);
+}
+
+/// Split a string.
+void split(const std::string& text, const std::regex& re, auto callback) {
+    std::sregex_token_iterator it{text.begin(), text.end(), re, -1};
+    std::sregex_token_iterator end;
+    for (; it != end; ++it) std::invoke(callback, *it);
 }
 
 } // namespace detail

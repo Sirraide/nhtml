@@ -8,6 +8,10 @@
 using namespace nhtml::detail;
 using namespace v8;
 
+namespace {
+static const std::regex ws_regex{"\\s+"};
+}
+
 namespace nhtml::detail {
 /// Create a new string.
 static Local<String> S(Isolate* I, auto&& str) {
@@ -172,6 +176,7 @@ struct eval_impl {
             inst->SetAccessor(S(I, "text"), get_text, set_text);
             inst->SetAccessor(S(I, "children"), get_children);
             inst->SetAccessor(S(I, "id"), get_id, set_id);
+            inst->SetAccessor(S(I, "classes"), get_classes, set_classes);
             proto->Set(S(I, "toString"), FunctionTemplate::New(I, to_string));
         }
 
@@ -231,6 +236,23 @@ struct eval_impl {
             info.GetReturnValue().Set(S(I, handle(info)->id));
         }
 
+        /// Get classes of an element.
+        static void get_classes(Local<String>, const PropertyCallbackInfo<Value>& info) {
+            auto I = info.GetIsolate();
+            HandleScope hs{I};
+
+            /// Concatenate them to a string.
+            std::string class_list;
+            auto e = handle(info);
+            for (auto& c : e->classes) {
+                if (not class_list.empty()) class_list += " ";
+                class_list += c;
+            }
+
+            /// Return.
+            info.GetReturnValue().Set(S(I, class_list));
+        }
+
         /// Set text content of an element.
         static void set_text(
             Local<String>,
@@ -248,7 +270,7 @@ struct eval_impl {
 
             /// Set text.
             auto e = handle(info);
-            e->content = std::string{*String::Utf8Value{I, new_text}};
+            e->content = trim(std::string{*String::Utf8Value{I, new_text}});
         }
 
         /// Set attributes of an element.
@@ -278,10 +300,13 @@ struct eval_impl {
                 String::Utf8Value utf8_name{I, name};
                 String::Utf8Value utf8_value{I, value};
                 (void) e->attributes.try_emplace(
-                    std::string{*utf8_name, size_t(utf8_name.length())},
-                    std::string{*utf8_value, size_t(utf8_value.length())}
+                    trim(std::string{*utf8_name, size_t(utf8_name.length())}),
+                    trim(std::string{*utf8_value, size_t(utf8_value.length())})
                 );
             }
+
+            /// Move class attribute to class list.
+            handle_class_attribute(e);
         }
 
         /// Set ID of an element.
@@ -290,6 +315,27 @@ struct eval_impl {
             HandleScope hs{I};
             String::Utf8Value utf8{I, s->ToString(I->GetCurrentContext()).ToLocalChecked()};
             handle(info)->id = trim(std::string{*utf8, size_t(utf8.length())});
+        }
+
+        /// Set classes of an element.
+        static void set_classes(
+            Local<String>,
+            Local<Value> new_classes,
+            const PropertyCallbackInfo<void>& info
+        ) {
+            auto I = info.GetIsolate();
+            HandleScope hs{I};
+
+            /// Value must be a string.
+            if (not new_classes->IsString()) {
+                I->ThrowError("classes must be a string");
+                return;
+            }
+
+            /// Set classes.
+            auto e = handle(info);
+            e->classes.clear();
+            split(trim(std::string{*String::Utf8Value{I, new_classes}}), ws_regex, [&](auto&& it) { e->classes.insert(it); });
         }
     };
 
@@ -330,7 +376,10 @@ struct eval_impl {
             auto h = handle(info);
             String::Utf8Value utf8{I, name};
             String::Utf8Value utf8_val{I, val->ToString(I->GetCurrentContext()).ToLocalChecked()};
-            h->attributes[std::string{*utf8, size_t(utf8.length())}] = std::string{*utf8_val, size_t(utf8_val.length())};
+            h->attributes[trim(std::string{*utf8, size_t(utf8.length())})] = trim(std::string{*utf8_val, size_t(utf8_val.length())});
+
+            /// Move class attribute to class list.
+            handle_class_attribute(h);
         }
 
         /// Delete an attribute.
@@ -745,6 +794,15 @@ struct eval_impl {
     /// Get the V8 evaluation context.
     auto v8_context() -> Local<Context> {
         return reinterpret_cast<eval_scope*>(eval_scope_storage)->ctx;
+    }
+
+    /// Handle the act of appending a `class` attribute to the attributes list.
+    static void handle_class_attribute(element* h) {
+        if (auto class_list = h->attributes.find("class"); class_list != h->attributes.end()) {
+            h->classes.clear();
+            split(class_list->second, ws_regex, [&](auto&& it) { h->classes.insert(it); });
+            h->attributes.erase(class_list);
+        }
     }
 
     /// Create an object template.

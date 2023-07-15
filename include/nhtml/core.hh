@@ -10,6 +10,10 @@
 #include <atomic>
 
 namespace nhtml {
+namespace detail {
+class parser;
+}
+
 /// Quoting style for attributes.
 enum struct quoting_style {
     single_quotes,
@@ -76,8 +80,13 @@ struct element {
     std::variant<std::monostate, std::string, vector> content = std::monostate{};
 
 private:
+    friend class detail::parser;
+
     /// Reference count.
     std::atomic<usz> refcount = 0;
+
+    /// Used by query_selector_all().
+    bool selected = false;
 
     explicit element() {}
     explicit element(std::string _tag_name)
