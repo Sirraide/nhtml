@@ -561,7 +561,7 @@ auto nhtml::detail::parser::parse_element() -> res<element::ptr> {
 
             /// Include directive.
             if (name == "include") {
-                if (not at(tk::lparen)) return mkerr("Expected '(' after 'include'.");
+                if (not at(tk::lparen)) return diag(diag_kind::error, l, "Expected '(' after 'include'.");
                 auto file_path = read_until_chars(')');
                 if (not file_path) return err{file_path.error()};
 
@@ -570,11 +570,11 @@ auto nhtml::detail::parser::parse_element() -> res<element::ptr> {
                 std::error_code ec;
                 fs::path base_path = fs::canonical(file_stack.back()->parent_directory, ec);
                 if (ec or not fs::exists(base_path)) base_path = fs::current_path(ec);
-                if (ec) return mkerr("Failed to get current working directory: {}", ec.message());
+                if (ec) return diag(diag_kind::error, l, "Failed to get current working directory: {}", ec.message());
 
                 /// Resolve the path.
                 fs::path path = fs::canonical(base_path / *file_path, ec);
-                if (ec) return mkerr("Failed to resolve path '{}': {}", *file_path, ec.message());
+                if (ec) return diag(diag_kind::error, l, "Failed to resolve path '{}': {}", *file_path, ec.message());
 
                 /// Read and add the file.
                 auto f = file::map(std::move(path));
@@ -582,16 +582,16 @@ auto nhtml::detail::parser::parse_element() -> res<element::ptr> {
                 check(add_file(std::move(*f)));
 
                 /// Yeet closing paren.
-                if (not at(tk::rparen)) return mkerr("Expected ')' after 'include' file path.");
+                if (not at(tk::rparen)) return diag(diag_kind::error, tok.location, "Expected ')' after 'include' file path.");
                 advance();
                 return {};
             }
 
             /// Raw HTML.
             if (name == "__html__") {
-                if (not at(tk::lbrace)) return mkerr("Expected '{{' after '__html__'.");
+                if (not at(tk::lbrace)) return diag(diag_kind::error, l, "Expected '{{' after '__html__'.");
                 auto html = read_until_chars('}');
-                if (not at(tk::rbrace)) return mkerr("Expected '}}' after raw HTML.");
+                if (not at(tk::rbrace)) return diag(diag_kind::error, tok.location, "Expected '}}' after raw HTML.");
                 advance();
 
                 auto el = element::make("__html__");
