@@ -214,7 +214,6 @@ struct eval_impl {
                 e->front()->tag_name == "text"
             ) {
                 info.GetReturnValue().Set(S(I, std::get<std::string>(e->front()->content)));
-                h->content = std::move(e->front()->content);
                 return;
             }
 
