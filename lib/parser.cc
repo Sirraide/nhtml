@@ -516,7 +516,7 @@ auto resolve_include_path(parser& p, loc l, std::string_view file_path, std::str
 ///             | <raw-html>
 /// <style-tag> ::= "style" <css-data>
 /// <eval-tag> ::= ( "eval" | "eval!" ) "{" TEXT "}"
-/// <include-directive> ::= "include" "(" TOKENS ")"
+/// <include-directive> ::= "include" ( "(" TOKENS ")" | NAME )
 /// <raw-html> ::= "__html__" "{" TOKENS "}"
 auto nhtml::detail::parser::parse_element() -> res<element::ptr> {
     auto l = tok.location;
@@ -557,23 +557,31 @@ auto nhtml::detail::parser::parse_element() -> res<element::ptr> {
 
             /// Include directive.
             if (name == "include") {
-                if (not at(tk::lparen)) return diag(diag_kind::error, l, "Expected '(' after 'include'.");
-                auto file_path = read_until_chars<false>(')');
-                if (not file_path) return err{file_path.error()};
+                /// If followed by '(', then everything up to the next ')' is
+                /// the filename, including the extension. If followed by a name
+                /// the name is the filename, and `.nhtml` is appended to it.
+                std::string file_path;
+                if (at(tk::name)) file_path = tok.text + ".nhtml";
+                else {
+                    if (not at(tk::lparen)) return diag(diag_kind::error, l, "Expected '(' after 'include'.");
+                    auto fp = read_until_chars<false>(')');
+                    if (not fp) return err{fp.error()};
+                    file_path = std::move(*fp);
 
-                /// Yeet the closing paren. We can’t call next() here since
-                /// we only want to start reading tokens from this file again
-                /// after we’re done reading the included file.
-                ///
-                /// This will always discard a closing paren since the call to
-                /// read_until_chars() above has already made sure that we are
-                /// at a closing paren.
-                next_char();
+                    /// Yeet the closing paren. We can’t call next() here since
+                    /// we only want to start reading tokens from this file again
+                    /// after we’re done reading the included file.
+                    ///
+                    /// This will always discard a closing paren since the call to
+                    /// read_until_chars() above has already made sure that we are
+                    /// at a closing paren.
+                    next_char();
+                }
 
                 /// Check every directory in the include path.
                 fs::path resolved;
                 for (auto& dir : include_dirs) {
-                    if (auto res = resolve_include_path(*this, l, *file_path, dir)) {
+                    if (auto res = resolve_include_path(*this, l, file_path, dir)) {
                         resolved = std::move(*res);
                         break;
                     }
@@ -581,14 +589,14 @@ auto nhtml::detail::parser::parse_element() -> res<element::ptr> {
 
                 /// Check the file’s parent directory and the current directory.
                 if (resolved.empty())
-                    if (auto res = resolve_include_path(*this, l, *file_path, file_stack.back()->parent_directory.native()))
+                    if (auto res = resolve_include_path(*this, l, file_path, file_stack.back()->parent_directory.native()))
                         resolved = std::move(*res);
                 if (resolved.empty())
-                    if (auto res = resolve_include_path(*this, l, *file_path, fs::current_path().native()))
+                    if (auto res = resolve_include_path(*this, l, file_path, fs::current_path().native()))
                         resolved = std::move(*res);
 
                 /// Make sure we actually have a path.
-                if (resolved.empty()) return diag(diag_kind::error, l, "Could not resolve include path '{}'.", *file_path);
+                if (resolved.empty()) return diag(diag_kind::error, l, "Could not resolve include path '{}'.", file_path);
 
                 /// Read and add the file.
                 auto f = file::map(std::move(resolved));

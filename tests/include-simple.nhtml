@@ -1,0 +1,3 @@
+/// Include directive w/o extension. Defaults to `.nhtml`
+include divs
+include divs

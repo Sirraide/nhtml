@@ -13,7 +13,7 @@
 <element-named-rest> ::= { <element-data> } [ <content> ]
 <style-tag> ::= "style" <css-data>
 <eval-tag> ::= ( "eval" | "eval!" ) "{" TEXT "}"
-<include-directive> ::= "include" "(" TOKENS ")"
+<include-directive> ::= "include" ( "(" TOKENS ")" | NAME )
 <raw-html> ::= "__html__" "{" TOKENS "}"
 
 <element-data> ::= <attr-list> | <inline-style> | CLASS | ID
